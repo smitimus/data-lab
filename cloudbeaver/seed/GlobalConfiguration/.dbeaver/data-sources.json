@@ -1,0 +1,136 @@
+{
+	"folders": {},
+	"connections": {
+		"postgres-jdbc-19b3d4469b5-799ddb2bf6d6b68a": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "Gas Station — EDW",
+			"save-password": true,
+			"configuration": {
+				"host": "postgres",
+				"port": "5432",
+				"database": "gas_station",
+				"url": "jdbc:postgresql://postgres:5432/gas_station",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"auth-model": "native",
+				"auth-properties": {
+					"user": "postgres",
+					"password": "postgres"
+				},
+				"bootstrap": {
+					"autocommit": true
+				}
+			}
+		},
+		"postgres-jdbc-verisim-source": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "Verisim — Gas Station Source",
+			"save-password": true,
+			"configuration": {
+				"host": "verisim-base-postgres",
+				"port": "5432",
+				"database": "gas_station",
+				"url": "jdbc:postgresql://verisim-base-postgres:5432/gas_station",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"auth-model": "native",
+				"auth-properties": {
+					"user": "verisim",
+					"password": "verisim"
+				},
+				"bootstrap": {
+					"autocommit": true
+				}
+			}
+		},
+		"postgres-jdbc-grocery-edw": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "Grocery — EDW",
+			"save-password": true,
+			"configuration": {
+				"host": "postgres",
+				"port": "5432",
+				"database": "grocery",
+				"url": "jdbc:postgresql://postgres:5432/grocery",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"auth-model": "native",
+				"auth-properties": {
+					"user": "postgres",
+					"password": "postgres"
+				},
+				"bootstrap": {
+					"autocommit": true
+				}
+			}
+		},
+		"postgres-jdbc-grocery-source": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "Verisim — Grocery Source",
+			"save-password": true,
+			"configuration": {
+				"host": "verisim-base-postgres",
+				"port": "5432",
+				"database": "grocery",
+				"url": "jdbc:postgresql://verisim-base-postgres:5432/grocery",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"auth-model": "native",
+				"auth-properties": {
+					"user": "verisim",
+					"password": "verisim"
+				},
+				"bootstrap": {
+					"autocommit": true
+				}
+			}
+		},
+		"postgres-jdbc-airflow-meta": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "Airflow — Metadata DB",
+			"save-password": true,
+			"configuration": {
+				"host": "postgres",
+				"port": "5432",
+				"database": "airflow",
+				"url": "jdbc:postgresql://postgres:5432/airflow",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"auth-model": "native",
+				"auth-properties": {
+					"user": "postgres",
+					"password": "postgres"
+				},
+				"bootstrap": {
+					"autocommit": true
+				}
+			}
+		}
+	},
+	"connection-types": {
+		"dev": {
+			"name": "Development",
+			"color": "255,255,255",
+			"description": "Regular development database",
+			"auto-commit": true,
+			"confirm-execute": false,
+			"confirm-data-change": false,
+			"smart-commit": false,
+			"smart-commit-recover": true,
+			"auto-close-transactions": true,
+			"close-transactions-period": 1800,
+			"auto-close-connections": true,
+			"close-connections-period": 14400
+		}
+	}
+}

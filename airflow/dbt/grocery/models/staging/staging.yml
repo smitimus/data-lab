@@ -1,0 +1,443 @@
+version: 2
+
+models:
+
+  # ── HR ────────────────────────────────────────────────────────────────────
+
+  - name: stg_locations
+    columns:
+      - name: location_id
+        tests: [unique, not_null]
+      - name: location_name
+        tests: [not_null]
+      - name: location_type
+        tests: [not_null]
+
+  - name: stg_employees
+    columns:
+      - name: employee_id
+        tests: [unique, not_null]
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+
+  - name: stg_hr_schedules
+    columns:
+      - name: schedule_id
+        tests: [unique, not_null]
+      - name: employee_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_employees')
+              field: employee_id
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: scheduled_date
+        tests: [not_null]
+
+  # ── POS ───────────────────────────────────────────────────────────────────
+
+  - name: stg_pos_departments
+    columns:
+      - name: department_id
+        tests: [unique, not_null]
+      - name: department_name
+        tests: [not_null]
+
+  - name: stg_pos_products
+    columns:
+      - name: product_id
+        tests: [unique, not_null]
+      - name: sku
+        tests: [unique, not_null]
+      - name: department_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_departments')
+              field: department_id
+      - name: unit_price
+        tests: [not_null]
+      - name: unit_cost
+        tests: [not_null]
+
+  - name: stg_pos_transactions
+    columns:
+      - name: transaction_id
+        tests: [unique, not_null]
+      - name: transaction_dt
+        tests: [not_null]
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: employee_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_employees')
+              field: employee_id
+      - name: total
+        tests: [not_null]
+
+  - name: stg_pos_transaction_items
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+      - name: transaction_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_transactions')
+              field: transaction_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+      - name: quantity
+        tests: [not_null]
+      - name: unit_price
+        tests: [not_null]
+      - name: line_total
+        tests: [not_null]
+
+  - name: stg_pos_loyalty_members
+    columns:
+      - name: member_id
+        tests: [unique, not_null]
+      - name: email
+        tests: [unique, not_null]
+
+  - name: stg_pos_loyalty_point_transactions
+    columns:
+      - name: pt_id
+        tests: [unique, not_null]
+      - name: member_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_loyalty_members')
+              field: member_id
+      - name: transaction_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_transactions')
+              field: transaction_id
+
+  - name: stg_pos_price_history
+    columns:
+      - name: price_history_id
+        tests: [unique, not_null]
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+
+  - name: stg_pos_coupons
+    columns:
+      - name: coupon_id
+        tests: [unique, not_null]
+      - name: valid_from
+        tests: [not_null]
+      - name: valid_until
+        tests: [not_null]
+
+  - name: stg_pos_combo_deals
+    columns:
+      - name: deal_id
+        tests: [unique, not_null]
+      - name: valid_from
+        tests: [not_null]
+      - name: valid_until
+        tests: [not_null]
+
+  # ── Timeclock ─────────────────────────────────────────────────────────────
+
+  - name: stg_timeclock_events
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: employee_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_employees')
+              field: employee_id
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['clock_in', 'clock_out', 'break_start', 'break_end']
+      - name: event_dt
+        tests: [not_null]
+
+  # ── Ordering ──────────────────────────────────────────────────────────────
+
+  - name: stg_ordering_store_orders
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: store_location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: warehouse_location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: order_dt
+        tests: [not_null]
+      - name: status
+        tests: [not_null]
+
+  - name: stg_ordering_store_order_items
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+      - name: order_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_ordering_store_orders')
+              field: order_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+      - name: quantity_requested
+        tests: [not_null]
+
+  # ── Fulfillment ───────────────────────────────────────────────────────────
+
+  - name: stg_fulfillment_orders
+    columns:
+      - name: fulfillment_id
+        tests: [unique, not_null]
+      - name: store_order_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_ordering_store_orders')
+              field: order_id
+      - name: warehouse_location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+
+  - name: stg_fulfillment_items
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+      - name: fulfillment_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_fulfillment_orders')
+              field: fulfillment_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+
+  # ── Transport ─────────────────────────────────────────────────────────────
+
+  - name: stg_transport_trucks
+    columns:
+      - name: truck_id
+        tests: [unique, not_null]
+      - name: license_plate
+        tests: [unique, not_null]
+
+  - name: stg_transport_loads
+    columns:
+      - name: load_id
+        tests: [unique, not_null]
+      - name: truck_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_transport_trucks')
+              field: truck_id
+      - name: driver_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_employees')
+              field: employee_id
+      - name: warehouse_location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: destination_location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+
+  - name: stg_transport_load_items
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+      - name: load_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_transport_loads')
+              field: load_id
+      - name: fulfillment_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_fulfillment_orders')
+              field: fulfillment_id
+      - name: store_order_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_ordering_store_orders')
+              field: order_id
+
+  # ── Inventory ─────────────────────────────────────────────────────────────
+
+  - name: stg_inv_products
+    columns:
+      - name: inv_product_id
+        tests: [unique, not_null]
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+
+  - name: stg_inv_stock_levels
+    columns:
+      - name: stock_id
+        tests: [unique, not_null]
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+
+  - name: stg_inv_receipts
+    columns:
+      - name: receipt_id
+        tests: [unique, not_null]
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+      - name: load_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_transport_loads')
+              field: load_id
+
+  - name: stg_inv_receipt_items
+    columns:
+      - name: receipt_item_id
+        tests: [unique, not_null]
+      - name: receipt_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_inv_receipts')
+              field: receipt_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+
+  - name: stg_inv_shrinkage_events
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+      - name: location_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_locations')
+              field: location_id
+
+  # ── Pricing ───────────────────────────────────────────────────────────────
+
+  - name: stg_pricing_weekly_ads
+    columns:
+      - name: ad_id
+        tests: [unique, not_null]
+      - name: start_date
+        tests: [not_null]
+      - name: end_date
+        tests: [not_null]
+
+  - name: stg_pricing_ad_items
+    columns:
+      - name: ad_item_id
+        tests: [unique, not_null]
+      - name: ad_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pricing_weekly_ads')
+              field: ad_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pos_products')
+              field: product_id
+      - name: promoted_price
+        tests: [not_null]

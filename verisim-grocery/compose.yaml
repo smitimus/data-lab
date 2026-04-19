@@ -1,0 +1,34 @@
+# Verisim Grocery — Standalone release stack
+# Pulls the pre-built image from Docker Hub (smiti/verisim-grocery).
+# All-in-one: PostgreSQL + FastAPI + Streamlit UI + generator in one container.
+#
+# Quick start:
+#   cd /opt/stacks/verisim-grocery && docker compose up -d
+#
+# 260321 - initial setup
+# 260404 - replaced dev build with standalone release image
+
+services:
+
+  verisim-grocery:
+    container_name: verisim-grocery
+    image: smiti/verisim-grocery:latest
+    ports:
+      - "${VERISIM_POSTGRES_PORT:-5499}:5432"
+      - "${VERISIM_API_PORT:-8010}:8000"
+      - "${VERISIM_UI_PORT:-8501}:8501"
+    environment:
+      POSTGRES_USER: ${VERISIM_POSTGRES_USER:-verisim}
+      POSTGRES_PASSWORD: ${VERISIM_POSTGRES_PASSWORD:-verisim}
+      POSTGRES_DB: ${VERISIM_GROCERY_DB:-grocery}
+      TZ: ${TZ}
+    volumes:
+      - ${CONF}/verisim-grocery:/var/lib/postgresql/data
+    restart: unless-stopped
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=Verisim Grocery
+      - homepage.icon=docker.png
+      - homepage.href=http://${IP}:${VERISIM_UI_PORT:-8501}/
+      - homepage.description=Grocery data generator — UI: no auth | API: no auth | DB: verisim/verisim
+

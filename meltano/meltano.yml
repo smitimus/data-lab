@@ -1,0 +1,204 @@
+version: 1
+send_anonymous_usage_stats: false
+project_id: verisim-multi-industry
+default_environment: dev
+
+environments:
+- name: dev
+
+plugins:
+  extractors:
+  # ---------------------------------------------------------------------------
+  # Gas Station — tap-postgres → gas_station DB (hr, pos, fuel, inv schemas)
+  # ---------------------------------------------------------------------------
+  - name: tap-postgres
+    variant: transferwise
+    namespace: tap_postgres
+    pip_url: pipelinewise-tap-postgres
+    executable: tap-postgres
+    capabilities:
+    - catalog
+    - discover
+    - state
+    settings:
+    - name: host
+    - name: port
+      kind: integer
+    - name: user
+    - name: password
+      kind: password
+    - name: dbname
+    - name: filter_schemas
+    - name: default_replication_method
+    config:
+      host: "${IP}"
+      port: 5499
+      user: verisim
+      password: verisim
+      dbname: gas_station
+      filter_schemas: "hr,pos,fuel,inv"
+      default_replication_method: FULL_TABLE
+    select:
+    - "hr-locations.*"
+    - "hr-employees.*"
+    - "pos-employees.*"
+    - "pos-loyalty_members.*"
+    - "pos-products.*"
+    - "pos-price_history.*"
+    - "pos-transactions.*"
+    - "pos-transaction_items.*"
+    - "fuel-grades.*"
+    - "fuel-price_history.*"
+    - "fuel-pumps.*"
+    - "fuel-transactions.*"
+    - "inv-products.*"
+    - "inv-stock_levels.*"
+    - "inv-receipts.*"
+    - "inv-receipt_items.*"
+    metadata:
+      "pos-transactions":
+        replication-method: INCREMENTAL
+        replication-key: transaction_dt
+      "fuel-transactions":
+        replication-method: INCREMENTAL
+        replication-key: transaction_dt
+      "pos-loyalty_members":
+        replication-method: INCREMENTAL
+        replication-key: created_at
+      "pos-price_history":
+        replication-method: INCREMENTAL
+        replication-key: changed_at
+      "fuel-price_history":
+        replication-method: INCREMENTAL
+        replication-key: changed_at
+      "inv-receipts":
+        replication-method: INCREMENTAL
+        replication-key: received_dt
+
+  # ---------------------------------------------------------------------------
+  # Grocery — tap-postgres-grocery → grocery DB (hr, pos, timeclock, ordering,
+  #           fulfillment, transport, inv schemas; 22 tables)
+  # ---------------------------------------------------------------------------
+  - name: tap-postgres-grocery
+    inherit_from: tap-postgres
+    config:
+      dbname: grocery
+      filter_schemas: "hr,pos,timeclock,ordering,fulfillment,transport,inv,pricing"
+      default_replication_method: FULL_TABLE
+    select:
+    - "hr-locations.*"
+    - "hr-employees.*"
+    - "hr-schedules.*"
+    - "pos-departments.*"
+    - "pos-products.*"
+    - "pos-price_history.*"
+    - "pos-coupons.*"
+    - "pos-combo_deals.*"
+    - "pos-loyalty_members.*"
+    - "pos-loyalty_point_transactions.*"
+    - "pos-transactions.*"
+    - "pos-transaction_items.*"
+    - "timeclock-events.*"
+    - "ordering-store_orders.*"
+    - "ordering-store_order_items.*"
+    - "fulfillment-orders.*"
+    - "fulfillment-items.*"
+    - "transport-trucks.*"
+    - "transport-loads.*"
+    - "transport-load_items.*"
+    - "inv-products.*"
+    - "inv-stock_levels.*"
+    - "inv-receipts.*"
+    - "inv-receipt_items.*"
+    - "inv-shrinkage_events.*"
+    - "pricing-weekly_ads.*"
+    - "pricing-ad_items.*"
+    metadata:
+      "pos-transactions":
+        replication-method: INCREMENTAL
+        replication-key: transaction_dt
+      "pos-loyalty_members":
+        replication-method: INCREMENTAL
+        replication-key: created_at
+      "pos-price_history":
+        replication-method: INCREMENTAL
+        replication-key: changed_at
+      "timeclock-events":
+        replication-method: INCREMENTAL
+        replication-key: event_dt
+      "inv-receipts":
+        replication-method: INCREMENTAL
+        replication-key: received_dt
+      "inv-shrinkage_events":
+        replication-method: INCREMENTAL
+        replication-key: recorded_at
+      "pos-loyalty_point_transactions":
+        replication-method: INCREMENTAL
+        replication-key: created_at
+
+  loaders:
+  # ---------------------------------------------------------------------------
+  # Gas Station — target-postgres → gas_station DB in EDW
+  # ---------------------------------------------------------------------------
+  - name: target-postgres
+    variant: transferwise
+    namespace: target_postgres
+    pip_url: pipelinewise-target-postgres
+    executable: target-postgres
+    capabilities:
+    - about
+    settings:
+    - name: host
+    - name: port
+      kind: integer
+    - name: user
+    - name: password
+      kind: password
+    - name: dbname
+    - name: default_target_schema
+    - name: add_metadata_columns
+      kind: boolean
+    config:
+      host: postgres
+      port: 5432
+      user: postgres
+      password: postgres
+      dbname: gas_station
+      add_metadata_columns: true
+      schema_mapping:
+        hr:
+          target_schema: raw_hr
+        pos:
+          target_schema: raw_pos
+        fuel:
+          target_schema: raw_fuel
+        inv:
+          target_schema: raw_inv
+
+  # ---------------------------------------------------------------------------
+  # Grocery — target-postgres-grocery → grocery DB in EDW
+  # ---------------------------------------------------------------------------
+  - name: target-postgres-grocery
+    inherit_from: target-postgres
+    config:
+      dbname: grocery
+      add_metadata_columns: true
+      schema_mapping:
+        hr:
+          target_schema: raw_hr
+        pos:
+          target_schema: raw_pos
+        timeclock:
+          target_schema: raw_timeclock
+        ordering:
+          target_schema: raw_ordering
+        fulfillment:
+          target_schema: raw_fulfillment
+        transport:
+          target_schema: raw_transport
+        inv:
+          target_schema: raw_inv
+        pricing:
+          target_schema: raw_pricing
+
+schedules: []

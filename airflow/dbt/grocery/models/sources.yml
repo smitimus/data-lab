@@ -1,0 +1,229 @@
+version: 2
+
+sources:
+  # ---------------------------------------------------------------------------
+  # raw_hr — HR schema (locations, employees)
+  # ---------------------------------------------------------------------------
+  - name: raw_hr
+    schema: raw_hr
+    description: "HR source tables loaded by Meltano → raw_hr schema"
+    tables:
+      - name: locations
+        columns:
+          - name: location_id
+            tests: [unique, not_null]
+          - name: location_type
+            tests: [not_null]
+          - name: is_active
+            tests: [not_null]
+      - name: employees
+        columns:
+          - name: employee_id
+            tests: [unique, not_null]
+          - name: location_id
+            tests: [not_null]
+      - name: schedules
+        columns:
+          - name: schedule_id
+            tests: [unique, not_null]
+          - name: employee_id
+            tests: [not_null]
+          - name: scheduled_date
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_pos — POS schema (departments, products, price_history, coupons,
+  #           combo_deals, loyalty_members, transactions, transaction_items)
+  # ---------------------------------------------------------------------------
+  - name: raw_pos
+    schema: raw_pos
+    description: "POS source tables loaded by Meltano → raw_pos schema"
+    tables:
+      - name: departments
+        columns:
+          - name: department_id
+            tests: [unique, not_null]
+      - name: products
+        columns:
+          - name: product_id
+            tests: [unique, not_null]
+      - name: price_history
+        columns:
+          - name: price_history_id
+            tests: [unique, not_null]
+      - name: coupons
+        columns:
+          - name: coupon_id
+            tests: [unique, not_null]
+      - name: combo_deals
+        columns:
+          - name: deal_id
+            tests: [unique, not_null]
+      - name: loyalty_members
+        columns:
+          - name: member_id
+            tests: [unique, not_null]
+      - name: loyalty_point_transactions
+        columns:
+          - name: pt_id
+            tests: [unique, not_null]
+          - name: member_id
+            tests: [not_null]
+          - name: transaction_id
+            tests: [not_null]
+      - name: transactions
+        columns:
+          - name: transaction_id
+            tests: [unique, not_null]
+          - name: transaction_dt
+            tests: [not_null]
+      - name: transaction_items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: transaction_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_timeclock — Timeclock schema (events)
+  # ---------------------------------------------------------------------------
+  - name: raw_timeclock
+    schema: raw_timeclock
+    description: "Timeclock source tables loaded by Meltano → raw_timeclock schema"
+    tables:
+      - name: events
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+          - name: employee_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_ordering — Store ordering schema (store_orders, store_order_items)
+  # ---------------------------------------------------------------------------
+  - name: raw_ordering
+    schema: raw_ordering
+    description: "Store ordering source tables loaded by Meltano → raw_ordering schema"
+    tables:
+      - name: store_orders
+        columns:
+          - name: order_id
+            tests: [unique, not_null]
+          - name: store_location_id
+            tests: [not_null]
+      - name: store_order_items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: order_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_fulfillment — Warehouse fulfillment schema (orders, items)
+  # ---------------------------------------------------------------------------
+  - name: raw_fulfillment
+    schema: raw_fulfillment
+    description: "Fulfillment source tables loaded by Meltano → raw_fulfillment schema"
+    tables:
+      - name: orders
+        columns:
+          - name: fulfillment_id
+            tests: [unique, not_null]
+          - name: store_order_id
+            tests: [not_null]
+      - name: items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: fulfillment_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_transport — Transport / trucking schema (trucks, loads, load_items)
+  # ---------------------------------------------------------------------------
+  - name: raw_transport
+    schema: raw_transport
+    description: "Transport source tables loaded by Meltano → raw_transport schema"
+    tables:
+      - name: trucks
+        columns:
+          - name: truck_id
+            tests: [unique, not_null]
+      - name: loads
+        columns:
+          - name: load_id
+            tests: [unique, not_null]
+          - name: truck_id
+            tests: [not_null]
+      - name: load_items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: load_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_inv — Inventory schema (products, stock_levels, receipts, receipt_items)
+  # ---------------------------------------------------------------------------
+  - name: raw_inv
+    schema: raw_inv
+    description: "Inventory source tables loaded by Meltano → raw_inv schema"
+    tables:
+      - name: products
+        columns:
+          - name: inv_product_id
+            tests: [unique, not_null]
+          - name: product_id
+            tests: [not_null]
+      - name: stock_levels
+        columns:
+          - name: stock_id
+            tests: [unique, not_null]
+          - name: product_id
+            tests: [not_null]
+          - name: location_id
+            tests: [not_null]
+      - name: receipts
+        columns:
+          - name: receipt_id
+            tests: [unique, not_null]
+          - name: location_id
+            tests: [not_null]
+      - name: receipt_items
+        columns:
+          - name: receipt_item_id
+            tests: [unique, not_null]
+          - name: receipt_id
+            tests: [not_null]
+      - name: shrinkage_events
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+          - name: product_id
+            tests: [not_null]
+          - name: location_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_pricing — Promotions / weekly ads schema (weekly_ads, ad_items)
+  # ---------------------------------------------------------------------------
+  - name: raw_pricing
+    schema: raw_pricing
+    description: "Pricing/promotions source tables loaded by Meltano → raw_pricing schema"
+    tables:
+      - name: weekly_ads
+        columns:
+          - name: ad_id
+            tests: [unique, not_null]
+          - name: start_date
+            tests: [not_null]
+          - name: end_date
+            tests: [not_null]
+      - name: ad_items
+        columns:
+          - name: ad_item_id
+            tests: [unique, not_null]
+          - name: ad_id
+            tests: [not_null]
+          - name: product_id
+            tests: [not_null]

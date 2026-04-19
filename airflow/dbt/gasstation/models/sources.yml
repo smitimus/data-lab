@@ -1,0 +1,108 @@
+version: 2
+
+sources:
+  # ---------------------------------------------------------------------------
+  # raw_hr — HR schema from datagen (hr.locations, hr.employees)
+  # ---------------------------------------------------------------------------
+  - name: raw_hr
+    schema: raw_hr
+    description: "HR source tables loaded by Meltano → raw_hr schema"
+    tables:
+      - name: locations
+        columns:
+          - name: location_id
+            tests: [unique, not_null]
+          - name: is_active
+            tests: [not_null]
+      - name: employees
+        columns:
+          - name: employee_id
+            tests: [unique, not_null]
+          - name: location_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_pos — POS schema from datagen
+  # ---------------------------------------------------------------------------
+  - name: raw_pos
+    schema: raw_pos
+    description: "POS source tables loaded by Meltano → raw_pos schema"
+    tables:
+      - name: products
+        columns:
+          - name: product_id
+            tests: [unique, not_null]
+      - name: transactions
+        columns:
+          - name: transaction_id
+            tests: [unique, not_null]
+          - name: transaction_dt
+            tests: [not_null]
+      - name: transaction_items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: transaction_id
+            tests: [not_null]
+      - name: loyalty_members
+        columns:
+          - name: member_id
+            tests: [unique, not_null]
+      - name: price_history
+        columns:
+          - name: price_history_id
+            tests: [unique, not_null]
+      - name: employees
+        columns:
+          - name: pos_employee_id
+            tests: [unique, not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_fuel — Fuel schema from datagen
+  # ---------------------------------------------------------------------------
+  - name: raw_fuel
+    schema: raw_fuel
+    description: "Fuel source tables loaded by Meltano → raw_fuel schema"
+    tables:
+      - name: grades
+        columns:
+          - name: grade_id
+            tests: [unique, not_null]
+      - name: transactions
+        columns:
+          - name: transaction_id
+            tests: [unique, not_null]
+          - name: transaction_dt
+            tests: [not_null]
+      - name: pumps
+        columns:
+          - name: pump_id
+            tests: [unique, not_null]
+      - name: price_history
+        columns:
+          - name: price_history_id
+            tests: [unique, not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_inv — Inventory schema from datagen
+  # ---------------------------------------------------------------------------
+  - name: raw_inv
+    schema: raw_inv
+    description: "Inventory source tables loaded by Meltano → raw_inv schema"
+    tables:
+      - name: products
+        columns:
+          - name: inv_product_id
+            tests: [unique, not_null]
+      - name: stock_levels
+        columns:
+          - name: stock_id
+            tests: [unique, not_null]
+      - name: receipts
+        columns:
+          - name: receipt_id
+            tests: [unique, not_null]
+      - name: receipt_items
+        columns:
+          - name: receipt_item_id
+            tests: [unique, not_null]

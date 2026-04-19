@@ -1,0 +1,84 @@
+# Apache Superset - Business Intelligence and Data Visualization
+# 250106 - initial setup: Superset with PostgreSQL backend
+# 260320 - fixed config path, added init service, pinned to stable image
+# 260320 - added superset-setup service for auto-provisioning EDW connection + dashboard
+# 260320 - consolidated data/ into conf/
+# 260321 - added postgres_network to superset-setup for ORM chart→dashboard linking
+
+x-superset-env: &superset-env
+  SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  TZ: ${TZ}
+
+services:
+  superset-init:
+    container_name: superset-init
+    image: apache/superset:4.1.2
+    environment:
+      <<: *superset-env
+    volumes:
+      - ${CONF}/superset:/app/superset_home
+    command: [
+      "bash", "-c",
+      "pip install --quiet psycopg2-binary && superset db upgrade && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password $${SUPERSET_ADMIN_PASSWORD:-admin} && superset init"
+    ]
+    restart: on-failure
+    networks:
+      - postgres_network
+
+  superset:
+    container_name: superset
+    image: apache/superset:4.1.2
+    environment:
+      <<: *superset-env
+    volumes:
+      - ${CONF}/superset:/app/superset_home
+      - ${CONF}/superset/data:/app/superset_data
+    ports:
+      - "${SUPERSET_PORT:-8088}:8088"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=Superset
+      - homepage.icon=superset.png
+      - homepage.href=http://${IP}:${SUPERSET_PORT:-8088}/
+      - homepage.description=BI dashboards — admin/admin
+    networks:
+      - superset_network
+      - postgres_network
+
+  superset-setup:
+    container_name: superset-setup
+    image: apache/superset:4.1.2
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USERNAME: admin
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ${CONF}/superset:/app/superset_home
+    command: ["bash", "-c", "pip install --quiet requests && python /app/superset_home/setup.py"]
+    depends_on:
+      superset:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - superset_network
+      - postgres_network
+
+networks:
+  superset_network:
+    driver: bridge
+  postgres_network:
+    external: true
+    name: postgres_postgres_network

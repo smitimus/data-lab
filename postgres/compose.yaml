@@ -1,0 +1,41 @@
+# Shared PostgreSQL Service
+# Provides a single PostgreSQL instance with multiple databases for all data engineering tools
+# 250106 - initial setup: shared PostgreSQL with init script for multiple databases
+# 260320 - init SQL moved to stacks/postgres/init/ (self-contained redeploy)
+
+services:
+  postgres:
+    container_name: postgres
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+
+      TZ: ${TZ}
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=PostgreSQL
+      - homepage.icon=postgresql.png
+      - homepage.href=http://${IP}:${POSTGRES_PORT:-5432}/
+      - homepage.description=Shared EDW — postgres/postgres (port 5432)
+    volumes:
+      - ${CONF}/postgres/data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d
+    ports:
+      - ${POSTGRES_PORT:-5432}:5432
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - -U
+        - ${POSTGRES_USER}
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - postgres_network
+networks:
+  postgres_network:
+    driver: bridge

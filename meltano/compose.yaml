@@ -1,0 +1,47 @@
+# Meltano - Singer-based EL Tool (tap-postgres → target-postgres)
+# 250106 - initial setup: Meltano with PostgreSQL backend
+# 260320 - rebuilt: proper project mount, meltano-init service, datagen → EDW ingestion
+
+services:
+  meltano-init:
+    container_name: meltano-init
+    image: meltano/meltano:latest
+    working_dir: /project
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ${CONF}/meltano:/project
+    command: ["install"]
+    restart: on-failure
+    networks:
+      - meltano_network
+      - postgres_network
+
+  meltano:
+    container_name: meltano
+    image: meltano/meltano:latest
+    working_dir: /project
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ${CONF}/meltano:/project
+    entrypoint: ["tail", "-f", "/dev/null"]
+    depends_on:
+      meltano-init:
+        condition: service_completed_successfully
+    restart: always
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=Meltano
+      - homepage.icon=meltano.png
+      - homepage.description=Singer EL — tap-postgres → target-postgres. No auth. Triggered via Airflow DAG.
+    networks:
+      - meltano_network
+      - postgres_network
+
+networks:
+  meltano_network:
+    driver: bridge
+  postgres_network:
+    external: true
+    name: postgres_postgres_network

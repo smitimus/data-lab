@@ -1,0 +1,33 @@
+# Dockhand — Docker management platform
+# 260405 - initial setup
+
+services:
+  dockhand:
+    image: fnsys/dockhand:latest
+    container_name: dockhand
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CONF}/dockhand:/app/data
+      ## Stack directories mounted at matching paths so Dockhand can read
+      ## compose files and resolve relative volume paths without rewriting.
+      ## Dockhand's path rewriter is unreliable with nested mounts;
+      ## matching paths bypass it entirely.
+      - /opt/stacks:/opt/stacks
+      - /opt/server:/opt/server
+      - /opt/dockge:/opt/dockge
+    environment:
+     # - PUID=${PUID}
+     # - PGID=${PGID}
+      - TZ=${TZ}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      ## Tells Dockhand the host equivalent of /app/data for path translation
+      - HOST_DATA_DIR=${HOST_DATA_DIR}
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=Dockhand
+      - homepage.icon=docker.png
+      - homepage.href=http://${IP}:3000/
+      - homepage.description=Docker stack manager — admin/admin

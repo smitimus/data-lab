@@ -1,0 +1,27 @@
+gasstation:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: postgres
+      port: 5432
+      user: postgres
+      password: postgres
+      dbname: gas_station
+      schema: staging
+      threads: 4
+      connect_timeout: 10
+
+grocery:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: postgres
+      port: 5432
+      user: postgres
+      password: postgres
+      dbname: grocery
+      schema: staging
+      threads: 4
+      connect_timeout: 10

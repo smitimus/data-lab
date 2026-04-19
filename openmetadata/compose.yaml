@@ -1,0 +1,180 @@
+# OpenMetadata — Data Catalog, Lineage & Governance
+# 260320 - rebuilt from scratch: added OpenSearch, db-init, pinned version, seeded connections
+#
+# Start order: postgres → verisim-base → verisim-gas-station → meltano → airflow → superset → openmetadata
+# Pre-requisite (once per host): sysctl -w vm.max_map_count=262144
+
+services:
+
+  # OpenSearch — required search backend
+  openmetadata-opensearch:
+    container_name: openmetadata-opensearch
+    image: opensearchproject/opensearch:2.13.0
+    environment:
+      - discovery.type=single-node
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ${CONF}/openmetadata/opensearch:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: always
+    networks:
+      - openmetadata_network
+
+  # Creates the openmetadata database in the existing shared postgres instance
+  openmetadata-db-init:
+    container_name: openmetadata-db-init
+    image: postgres:16
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER}
+    command: >-
+      sh -c 'until psql -h postgres -c "\q" 2>/dev/null; do echo "Waiting for postgres..."; sleep 3; done;
+      psql -h postgres -c "CREATE DATABASE openmetadata_db;" 2>&1 | grep -v "already exists";
+      psql -h postgres -lqt | grep -qw openmetadata_db && echo "openmetadata_db database ready"'
+    restart: on-failure
+    networks:
+      - postgres_network
+
+  # Runs Flyway migrations before the server starts (required on first deploy)
+  openmetadata-migrate:
+    container_name: openmetadata-migrate
+    image: docker.getcollate.io/openmetadata/server:1.5.4
+    environment:
+      DB_DRIVER_CLASS: org.postgresql.Driver
+      DB_SCHEME: postgresql
+      DB_USER: ${POSTGRES_USER}
+      DB_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: openmetadata_db
+      SEARCH_TYPE: opensearch
+      ELASTICSEARCH_HOST: openmetadata-opensearch
+      ELASTICSEARCH_PORT: 9200
+      ELASTICSEARCH_SCHEME: http
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    depends_on:
+      openmetadata-opensearch:
+        condition: service_healthy
+      openmetadata-db-init:
+        condition: service_completed_successfully
+    restart: on-failure
+    networks:
+      - openmetadata_network
+      - postgres_network
+
+  # OpenMetadata Server
+  openmetadata-server:
+    container_name: openmetadata-server
+    image: docker.getcollate.io/openmetadata/server:1.5.4
+    environment:
+      OPENMETADATA_CLUSTER_NAME: openmetadata
+      LOG_LEVEL: INFO
+      # Metadata store — existing shared postgres
+      DB_DRIVER_CLASS: org.postgresql.Driver
+      DB_SCHEME: postgresql
+      DB_USER: ${POSTGRES_USER}
+      DB_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: openmetadata_db
+      # Search — OpenSearch (Elasticsearch-compatible API)
+      SEARCH_TYPE: opensearch
+      ELASTICSEARCH_HOST: openmetadata-opensearch
+      ELASTICSEARCH_PORT: 9200
+      ELASTICSEARCH_SCHEME: http
+      # Auth
+      AUTHENTICATION_PROVIDER: basic
+      AUTHORIZER_CLASS_NAME: org.openmetadata.service.security.DefaultAuthorizer
+      AUTHORIZER_CONTAINER_REQUEST_FILTER: org.openmetadata.service.security.JwtFilter
+      AUTHORIZER_INITIAL_ADMINS: admin
+      AUTHORIZER_PRINCIPAL_DOMAIN: open-metadata.org
+      # JWT — uses keys bundled in the server image
+      RSA_PUBLIC_KEY_FILE_PATH: /opt/openmetadata/conf/public_key.der
+      RSA_PRIVATE_KEY_FILE_PATH: /opt/openmetadata/conf/private_key.der
+      JWT_ISSUER: open-metadata.org
+      JWT_KEY_ID: Gb389a-9f76-gdjs-a92j-0242bk94356
+      # Server
+      SERVER_HOST_API_URL: http://openmetadata-server:8585/api
+      WEB_CONF_URI: /
+      # Airflow pipeline integration
+      PIPELINE_SERVICE_CLIENT_ENDPOINT: http://airflow-apiserver:8080
+      PIPELINE_SERVICE_CLIENT_VERIFY_SSL: no-ssl
+      AIRFLOW_USERNAME: ${AIRFLOW_WWW_USER_USERNAME}
+      AIRFLOW_PASSWORD: ${AIRFLOW_WWW_USER_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - ${CONF}/openmetadata/server:/opt/openmetadata/conf/extra
+    ports:
+      - ${OPENMETADATA_PORT:-8585}:8585
+    depends_on:
+      openmetadata-opensearch:
+        condition: service_healthy
+      openmetadata-db-init:
+        condition: service_completed_successfully
+      openmetadata-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8585/api/v1/system/status 2>&1 | grep -qE '(healthy|Unauthorized|not present)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 120s
+    restart: always
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=OpenMetadata
+      - homepage.icon=openmetadata.png
+      - homepage.href=http://${IP}:${OPENMETADATA_PORT:-8585}/
+      - homepage.description=Data catalog and lineage — admin/admin
+    networks:
+      - openmetadata_network
+      - postgres_network
+
+  # Seeds service connections: EDW, Datagen, Airflow, Superset, dbt
+  openmetadata-setup:
+    container_name: openmetadata-setup
+    image: python:3.11-slim
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      IP: ${IP}
+      AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_WWW_USER_USERNAME}
+      AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_WWW_USER_PASSWORD}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      VERISIM_POSTGRES_USER: ${VERISIM_POSTGRES_USER}
+      VERISIM_POSTGRES_PASSWORD: ${VERISIM_POSTGRES_PASSWORD}
+      OPENMETADATA_ADMIN_EMAIL: ${OPENMETADATA_ADMIN_EMAIL:-admin@open-metadata.org}
+      OPENMETADATA_ADMIN_PASSWORD: ${OPENMETADATA_ADMIN_PASSWORD:-Admin1234@}
+    command: sh -c "pip install --quiet requests && python /setup/setup.py"
+    volumes:
+      - ./setup/setup.py:/setup/setup.py:ro
+      - /opt/stacks/airflow/dbt:/dbt:ro
+    depends_on:
+      openmetadata-server:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - openmetadata_network
+      - postgres_network
+
+networks:
+  openmetadata_network:
+    driver: bridge
+  postgres_network:
+    external: true
+    name: postgres_postgres_network

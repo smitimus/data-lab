@@ -1,0 +1,18 @@
+# Real env files — copy .env.example → .env and fill in values
+**/.env
+
+# Runtime data
+conf/
+.meltano/
+logs/
+
+# dbt artifacts
+airflow/dbt/**/logs/
+airflow/dbt/**/target/
+airflow/dbt/**/.user.yml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store

@@ -1,0 +1,37 @@
+# CloudBeaver - Web-based Database Management
+# 250106 - initial setup: CloudBeaver database admin interface
+# 260320 - removed stale DuckDB mounts, fixed postgres_network external ref
+# 260320 - consolidated data/ into conf/
+# 260321 - added verisim_network for direct access to verisim-base-postgres
+
+services:
+  cloudbeaver:
+    container_name: cloudbeaver
+    image: dbeaver/cloudbeaver:latest
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ${CONF}/cloudbeaver/workspace:/opt/cloudbeaver/workspace
+      - ${CONF}/cloudbeaver/logs:/opt/cloudbeaver/logs
+    ports:
+      - ${CLOUDBEAVER_PORT:-8978}:8978
+    restart: always
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=CloudBeaver
+      - homepage.icon=cloudbeaver.png
+      - homepage.href=http://${IP}:${CLOUDBEAVER_PORT:-8978}/
+      - homepage.description=Database viewer — first-run creates admin account (port 8978)
+    networks:
+      - cloudbeaver_network
+      - postgres_network
+      - verisim_network
+networks:
+  cloudbeaver_network:
+    driver: bridge
+  postgres_network:
+    external: true
+    name: postgres_postgres_network
+  verisim_network:
+    external: true
+    name: verisim_network
