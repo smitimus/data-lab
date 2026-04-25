@@ -67,7 +67,7 @@ install_docker() {
 }
 
 generate_fernet_key() {
-  python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
 }
 
 generate_secret() {
