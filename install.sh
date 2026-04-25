@@ -157,16 +157,21 @@ print_services() {
 }
 
 main() {
+  # When run as curl | bash, stdin is the pipe not the terminal.
+  # Reconnect to /dev/tty so interactive prompts work. Skip silently
+  # if no tty is available (headless/container environments).
+  [[ -t 0 ]] || { [[ -c /dev/tty ]] && exec </dev/tty; }
+
   banner
   echo -e "${BOLD}Press ENTER to continue or Ctrl+C to cancel...${NC}"
-  read -r </dev/tty
+  read -r
 
   # OS check
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     if [[ "$ID" != "debian" && "$ID" != "ubuntu" ]]; then
       warn "This installer targets Debian/Ubuntu. Detected: $ID"
-      echo "Continue anyway? (y/N)"; read -r ans </dev/tty
+      echo "Continue anyway? (y/N)"; read -r ans
       [[ "$ans" =~ ^[Yy]$ ]] || exit 1
     fi
   fi
