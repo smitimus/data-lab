@@ -85,7 +85,7 @@ def main():
     try:
         body, _ = request(
             "POST", "/api/stacks/adopt", payload,
-            headers={"Cookie": cookie},
+            headers={"Cookie": cookie} if cookie else None,
         )
     except urllib.error.HTTPError as e:
         print(f"ERROR: Adopt request failed ({e.code}): {e.read().decode()}")
