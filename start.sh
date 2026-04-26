@@ -83,7 +83,7 @@ start airflow build
 # 7. Superset — BI dashboards.
 #    The superset-init container runs database migrations and creates the
 #    admin user before the main server starts.  On first run, `superset init`
-#    (role/permission sync) can take 20+ minutes — this is normal.
+#    (role/permission sync) takes ~10-15 minutes — this is normal.
 #    The main superset container waits for superset-init to finish before
 #    accepting HTTP requests.
 start superset
@@ -104,7 +104,7 @@ echo ""
 echo "Notes:"
 echo "  - Meltano installs plugins on first start (3-5 min) — check: docker logs meltano-init"
 echo "  - Airflow runs DB migrations on first start (1-2 min)"
-echo "  - Superset auto-provisions the EDW dashboard after becoming healthy"
+echo "  - Superset dashboard import runs in background (~10-15 min); check /tmp/superset-import.log"
 echo "  - verisim-grocery self-bootstraps its grocery DB on first start"
 echo "  - dbt Docs: runs 'dbt docs generate' on startup (~30s) then serves on port 8082"
 echo ""

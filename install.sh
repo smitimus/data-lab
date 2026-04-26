@@ -186,16 +186,16 @@ adopt_stacks() {
 }
 
 # ------------------------------------------------------------
-# wait_for_superset — polls Superset's /health endpoint every 10 seconds
-# until it reports {"status": "OK"}.  superset init (role/permission sync)
-# takes 20-40 minutes on first run; this is called from a background job so
+# wait_for_superset — polls Superset's /health endpoint (returns plain "OK")
+# every 10 seconds until HTTP 200 is returned.  superset init typically takes
+# 10-15 minutes on first run; this is called from a background job so
 # install.sh can exit immediately and not block the user.
-# Times out after 2700 seconds (45 min) and returns non-zero on failure.
+# Times out after 1800 seconds (30 min) and returns non-zero on failure.
 # ------------------------------------------------------------
 wait_for_superset() {
-  log "Waiting for Superset to become healthy (superset init takes 20-40 min on first run)..."
-  local max=2700 i=0
-  while ! curl -sf http://localhost:8088/health | grep -q '"status".*"OK"'; do
+  log "Waiting for Superset to become healthy (superset init takes ~10-15 min on first run)..."
+  local max=1800 i=0
+  while ! curl -sf http://localhost:8088/health -o /dev/null 2>/dev/null; do
     sleep 10; i=$((i+10))
     [[ $i -ge $max ]] && { warn "Superset not ready after ${max}s — import dashboards manually."; return 1; }
     [[ $((i % 60)) -eq 0 ]] && log "Still waiting for Superset... (${i}s elapsed)"
