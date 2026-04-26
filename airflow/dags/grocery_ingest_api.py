@@ -424,6 +424,7 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
+    max_active_tasks=8,     # limit concurrency to avoid OOM on small VMs
     params={"start_dt": None, "end_dt": None},
     tags=["grocery", "api", "ingest", "granular"],
 ) as dag:

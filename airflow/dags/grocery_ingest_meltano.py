@@ -133,6 +133,7 @@ with DAG(
     schedule=None,          # manual trigger only
     catchup=False,
     max_active_runs=1,
+    max_active_tasks=4,     # limit concurrent meltano processes to avoid OOM
     tags=["grocery", "meltano", "ingest", "granular"],
 ) as dag:
 
