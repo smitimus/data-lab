@@ -9,6 +9,7 @@ services:
     working_dir: /project
     environment:
       TZ: ${TZ}
+      IP: ${IP}
     volumes:
       - ${CONF}/meltano:/project
     command: ["install"]
@@ -23,6 +24,7 @@ services:
     working_dir: /project
     environment:
       TZ: ${TZ}
+      IP: ${IP}
     volumes:
       - ${CONF}/meltano:/project
     entrypoint: ["tail", "-f", "/dev/null"]

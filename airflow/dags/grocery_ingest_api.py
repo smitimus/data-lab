@@ -46,7 +46,7 @@ EDW_CONN = {
     "user": "postgres",
     "password": "postgres",
 }
-PAGE_SIZE = 2000
+PAGE_SIZE = 1000
 INCREMENTAL_FALLBACK_DAYS = 30   # lookback when raw table is empty
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,13 @@ def ingest_table(
                 end = now_iso
                 log.info("[%s] no table yet — fallback window: %s → %s", task_id, start, end)
 
-            rows = _fetch_all(api_path, {api_start_param: start, api_end_param: end})
+            # Some endpoints expect date-only (YYYY-MM-DD) not full ISO timestamps
+            def _fmt(val, param):
+                return val[:10] if param and param.endswith("_date") else val
+            rows = _fetch_all(api_path, {
+                api_start_param: _fmt(start, api_start_param),
+                api_end_param:   _fmt(end,   api_end_param),
+            })
 
         # Auto-create table from first API row on first run
         if not table_exists and rows:
