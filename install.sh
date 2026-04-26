@@ -25,6 +25,13 @@ REPO_URL="https://github.com/smitimus/data-lab.git"
 INSTALL_DIR="/opt/data-lab"
 FALLBACK_DIR="${HOME}/data-lab"
 
+# AUTO_YES=true skips all interactive prompts (set via -y / --yes flag).
+# Used for automated testing; equivalent to pressing Enter/Y at every prompt.
+AUTO_YES=false
+for arg in "$@"; do
+  [[ "$arg" == "-y" || "$arg" == "--yes" ]] && AUTO_YES=true
+done
+
 # ANSI color codes for terminal output. NC = No Color (reset).
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BOLD='\033[1m'; NC='\033[0m'
@@ -241,16 +248,19 @@ print_services() {
 # ============================================================
 main() {
   # --- TTY reconnect -------------------------------------------------------
-  # When the script is invoked as `curl ... | bash`, stdin is the download
-  # pipe, not the terminal.  If /dev/tty exists, redirect stdin to it so
-  # interactive read prompts work normally.  If there is no TTY at all
-  # (fully headless environment), the exec fails silently and reads will
-  # either see EOF or be skipped.
-  [[ -t 0 ]] || { [[ -c /dev/tty ]] && exec </dev/tty; }
+  # When invoked as `curl ... | bash`, stdin is the pipe, not the terminal.
+  # Try to reconnect stdin to /dev/tty so interactive prompts work.
+  # The `|| true` prevents set -e from aborting if /dev/tty is inaccessible
+  # (e.g. SSH session without PTY allocation, or a container with no tty).
+  [[ -t 0 ]] || exec </dev/tty 2>/dev/null || true
 
   banner
-  echo -e "${BOLD}Press ENTER to continue or Ctrl+C to cancel...${NC}"
-  read -r
+  if [[ "$AUTO_YES" == "true" ]]; then
+    log "Running in non-interactive mode (-y)."
+  else
+    echo -e "${BOLD}Press ENTER to continue or Ctrl+C to cancel...${NC}"
+    read -r
+  fi
 
   # --- OS check ------------------------------------------------------------
   # Source /etc/os-release to populate distro variables ($ID, $VERSION_ID,
@@ -260,8 +270,12 @@ main() {
     . /etc/os-release
     if [[ "$ID" != "debian" && "$ID" != "ubuntu" ]]; then
       warn "This installer targets Debian/Ubuntu. Detected: $ID"
-      echo "Continue anyway? (y/N)"; read -r ans
-      [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+      if [[ "$AUTO_YES" == "true" ]]; then
+        warn "Non-interactive mode: continuing anyway."
+      else
+        echo "Continue anyway? (y/N)"; read -r ans
+        [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+      fi
     fi
   fi
 
