@@ -190,6 +190,7 @@ services:
     environment:
       <<: *a3
       DUMB_INIT_SETSID: "0"
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "2"
     restart: always
     depends_on:
       <<: *a2

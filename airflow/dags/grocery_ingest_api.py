@@ -236,6 +236,9 @@ def _fetch_all(path: str, params: dict) -> list:
     while True:
         p = {**params, "limit": PAGE_SIZE, "offset": offset}
         resp = requests.get(url, params=p, timeout=60)
+        if resp.status_code >= 500:
+            log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
+            return rows
         resp.raise_for_status()
         data = resp.json()
         page = data if isinstance(data, list) else data.get("data", [])
