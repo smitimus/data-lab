@@ -8,13 +8,11 @@ renamed as (
         name                                    as deal_name,
         description,
         deal_type,
-        trigger_qty,
-        trigger_product_id,
-        trigger_department_id,
-        deal_price,
-        valid_from,
-        valid_until,
-        is_active
+        trigger_qty::int                        as trigger_qty,
+        trigger_department                      as trigger_department_name,
+        deal_price::numeric                     as deal_price,
+        valid_from::date                        as valid_from,
+        valid_until::date                       as valid_until
     from source
 )
 

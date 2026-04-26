@@ -6,13 +6,12 @@ renamed as (
     select
         receipt_id,
         location_id,
-        received_by,
-        received_dt,
-        date_trunc('day', received_dt)::date    as received_date,
+        received_dt::timestamptz                as received_dt,
+        received_dt::date                       as received_date,
         supplier_name,
         po_number,
-        load_id,
-        total_cost,
+        total_cost::numeric                     as total_cost,
+        line_items::int                         as line_items,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

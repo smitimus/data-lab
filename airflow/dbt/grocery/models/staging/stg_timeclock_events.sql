@@ -8,8 +8,8 @@ renamed as (
         employee_id,
         location_id,
         event_type,
-        event_dt,
-        date_trunc('day', event_dt)::date       as event_date,
+        event_dt::timestamptz                   as event_dt,
+        event_dt::date                          as event_date,
         notes,
         _sdc_extracted_at                       as _extracted_at
     from source

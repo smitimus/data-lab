@@ -1,32 +1,21 @@
-with transaction_items as (
+with source as (
     select * from {{ source('raw_pos', 'transaction_items') }}
 ),
 
-products as (
+renamed as (
     select
+        item_id,
+        transaction_id,
         product_id,
-        name        as product_name,
+        product_name,
         category,
-        department_id
-    from {{ source('raw_pos', 'products') }}
-),
-
-joined as (
-    select
-        ti.item_id,
-        ti.transaction_id,
-        ti.product_id,
-        p.product_name,
-        p.category,
-        p.department_id,
-        ti.quantity,
-        ti.unit_price,
-        ti.discount,
-        ti.coupon_id,
-        ti.deal_id,
-        ti.line_total
-    from transaction_items ti
-    left join products p on p.product_id = ti.product_id
+        location_id,
+        quantity::int                           as quantity,
+        unit_price::numeric                     as unit_price,
+        discount::numeric                       as discount,
+        (unit_price::numeric - discount::numeric) * quantity::int   as line_total,
+        transaction_dt::timestamptz             as transaction_dt
+    from source
 )
 
-select * from joined
+select * from renamed

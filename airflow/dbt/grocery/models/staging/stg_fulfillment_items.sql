@@ -7,11 +7,11 @@ renamed as (
         item_id,
         fulfillment_id,
         product_id,
-        quantity_requested,
-        quantity_picked,
+        quantity_requested::int                 as quantity_requested,
+        quantity_picked::int                    as quantity_picked,
         pick_status,
         round(
-            quantity_picked::numeric / nullif(quantity_requested, 0) * 100,
+            quantity_picked::numeric / nullif(quantity_requested::numeric, 0) * 100,
             1
         )                                       as fill_rate_pct
     from source

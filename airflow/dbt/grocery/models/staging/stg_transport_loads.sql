@@ -9,14 +9,18 @@ renamed as (
         driver_id,
         warehouse_location_id,
         destination_location_id,
-        departed_at,
-        arrived_at,
+        departed_at::timestamptz                as departed_at,
+        arrived_at::timestamptz                 as arrived_at,
         status,
+        license_plate,
+        driver,
+        from_warehouse,
+        to_store,
         case
             when departed_at is not null and arrived_at is not null
-                then extract(epoch from (arrived_at - departed_at)) / 3600.0
+                then extract(epoch from (arrived_at::timestamptz - departed_at::timestamptz)) / 3600.0
         end                                     as hours_in_transit,
-        date_trunc('day', coalesce(arrived_at, departed_at))::date as load_date,
+        coalesce(arrived_at, departed_at)::date as load_date,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

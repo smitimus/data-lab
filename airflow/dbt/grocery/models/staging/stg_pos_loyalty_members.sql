@@ -9,11 +9,9 @@ renamed as (
         last_name,
         first_name || ' ' || last_name          as full_name,
         email,
-        phone,
-        signup_date,
-        points_balance,
+        signup_date::date                       as signup_date,
+        points_balance::int                     as points_balance,
         tier,
-        created_at,
         _sdc_extracted_at                       as _extracted_at
     from source
 )
