@@ -13,11 +13,10 @@ set -euo pipefail
 #   5.  Generate secrets (Fernet, JWT, Superset key, Dockhand key)
 #   6.  Generate all .env files from .env.example templates
 #   7.  Run global-env-sync.py to propagate globals
-#   8.  Set vm.max_map_count=262144 (required for OpenMetadata)
-#   9.  Run init.sh (seed conf/ dirs)
-#   10. Run start.sh (bring up all stacks)
-#   11. Wait for Superset, then auto-import dashboards
-#   12. Print service table with URLs and default credentials
+#   8.  Run init.sh (seed conf/ dirs)
+#   9.  Run start.sh (bring up all stacks)
+#   10. Wait for Superset, then auto-import dashboards
+#   11. Print service table with URLs and default credentials
 # =============================================================
 
 # GitHub repo to clone and the preferred install location.
@@ -362,27 +361,6 @@ main() {
   # STACKS, etc.) consistent without duplicating them in every template.
   log "Syncing global env vars..."
   python3 global-env-sync.py
-
-  # --- Kernel tuning -------------------------------------------------------
-  # OpenSearch (used by OpenMetadata) requires vm.max_map_count ≥ 262144 or
-  # it will OOM-crash at startup.  sysctl -w sets the value live; the
-  # /etc/sysctl.conf line persists it across reboots.
-  # If sysctl is blocked (e.g. inside a Docker container without the
-  # SYS_ADMIN capability), a bypass prompt is shown.  OpenMetadata will
-  # likely fail to start if this setting is not applied on the host.
-  log "Setting vm.max_map_count=262144 (required for OpenMetadata/OpenSearch)..."
-  if sysctl -w vm.max_map_count=262144 2>/dev/null; then
-    if ! grep -q "vm.max_map_count" /etc/sysctl.conf 2>/dev/null; then
-      echo "vm.max_map_count=262144" >> /etc/sysctl.conf
-    fi
-  else
-    warn "Could not set vm.max_map_count (permission denied — likely a container environment)."
-    warn "OpenMetadata/OpenSearch may fail to start without it."
-    warn "To fix on the host: sudo sysctl -w vm.max_map_count=262144"
-    echo ""
-    echo -n "Continue anyway? (y/N) "; read -r sysctl_ans
-    [[ "$sysctl_ans" =~ ^[Yy]$ ]] || exit 1
-  fi
 
   # --- Seed conf/ and start stacks -----------------------------------------
   # init.sh creates all runtime directories under CONF_DIR and copies seed
