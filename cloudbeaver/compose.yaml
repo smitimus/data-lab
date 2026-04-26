@@ -3,6 +3,7 @@
 # 260320 - removed stale DuckDB mounts, fixed postgres_network external ref
 # 260320 - consolidated data/ into conf/
 # 260321 - added verisim_network for direct access to verisim-base-postgres
+# 260426 - removed verisim_network: release stack uses published ports (5499), not docker network
 
 services:
   cloudbeaver:
@@ -25,13 +26,9 @@ services:
     networks:
       - cloudbeaver_network
       - postgres_network
-      - verisim_network
 networks:
   cloudbeaver_network:
     driver: bridge
   postgres_network:
     external: true
     name: postgres_postgres_network
-  verisim_network:
-    external: true
-    name: verisim_network
