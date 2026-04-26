@@ -1,6 +1,6 @@
 # Claude Context — Data Lab (`stacks/`)
 
-Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Meltano EL → postgres/grocery → dbt → Superset + dbt Docs.
+Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Airflow API ingest → postgres/grocery → dbt → Superset + dbt Docs.
 
 ## Directory Structure
 
@@ -15,7 +15,7 @@ Full analytics engineering stack pre-wired to Verisim Grocery as the data source
 - `verisim-grocery` — pulls `smiti/verisim-grocery` from Docker Hub
 
 **Seeded stacks** (init.sh copies stacks/ → conf/ before first start):
-- `superset`, `meltano`, `cloudbeaver`, `homepage`
+- `superset`, `cloudbeaver`, `homepage`
 
 ## One-Liner Installer (`install.sh`)
 

@@ -13,7 +13,7 @@ For a full historical backfill, pass DAG params:
   {"start_dt": "2026-01-01T00:00:00", "end_dt": "2026-03-22T23:59:59"}
 Incremental tables will use those bounds instead of the watermark.
 
-Tables: 27 across 8 schemas (same coverage as grocery_ingest_meltano / Meltano).
+Tables: 27 across 8 schemas.
 
 Schedule: None — trigger manually or via Airflow API.
 """
@@ -337,13 +337,13 @@ def ingest_table(
         table_exists = bool(raw_cols)
         log.info("[%s] raw table columns: %s", task_id, raw_cols)
 
-        # If table was created by meltano with surrogate PK columns, pk_col won't be
-        # in raw_cols — drop it so _ensure_table recreates it with the correct schema.
+        # If the table exists but pk_col is absent (e.g. created by a different tool
+        # with a different schema), drop it so _ensure_table recreates it correctly.
         if table_exists and pk_col not in raw_cols:
             with conn.cursor() as cur:
                 cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}"')
             conn.commit()
-            log.info("[%s] dropped %s.%s (PK column mismatch — meltano schema)", task_id, raw_schema, raw_table)
+            log.info("[%s] dropped %s.%s (pk_col missing — wrong schema)", task_id, raw_schema, raw_table)
             raw_cols = []
             table_exists = False
 
@@ -424,7 +424,7 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    max_active_tasks=8,     # limit concurrency to avoid OOM on small VMs
+    max_active_tasks=4,
     params={"start_dt": None, "end_dt": None},
     tags=["grocery", "api", "ingest", "granular"],
 ) as dag:

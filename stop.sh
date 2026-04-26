@@ -31,7 +31,6 @@ stop homepage         # Landing page — no dependencies
 stop cloudbeaver      # Database GUI — no dependencies
 stop superset         # BI layer — depends on postgres (stopped later)
 stop airflow          # Orchestrator — depends on postgres (stopped later)
-stop meltano          # EL pipeline — depends on postgres (stopped later)
 stop verisim-grocery  # Data source — independent, but stopped before postgres for clean ordering
 stop postgres         # Shared EDW — stopped last; all dependent stacks are already down
 stop dockhand         # Management UI — stopped last so it can observe the shutdown sequence

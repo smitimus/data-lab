@@ -67,16 +67,10 @@ sleep 30
 #    shared EDW postgres.
 start verisim-grocery
 
-# 5. Meltano — EL (Extract-Load) pipeline.
-#    Extracts grocery transaction data from the Verisim source DB and loads
-#    it into the EDW.  Installs its Singer tap/target plugins on first start
-#    (takes 3-5 minutes — watch with: docker logs meltano-init).
-start meltano
-
-# 6. Airflow — workflow orchestrator.
-#    Runs the grocery_pipeline DAG which calls Meltano (EL) and then dbt
-#    (transform).  Built locally because the image includes dbt and its
-#    dependencies baked in alongside the DAGs.
+# 5. Airflow — workflow orchestrator.
+#    Runs grocery_ingest_api (API → EDW raw), grocery_dbt (dbt transform),
+#    and grocery_complete_pipeline (both in sequence).
+#    Built locally because the image includes dbt and its dependencies.
 #    Runs DB migrations on first start (1-2 minutes).
 start airflow build
 
@@ -102,7 +96,6 @@ echo ""
 echo "=== All stacks started ==="
 echo ""
 echo "Notes:"
-echo "  - Meltano installs plugins on first start (3-5 min) — check: docker logs meltano-init"
 echo "  - Airflow runs DB migrations on first start (1-2 min)"
 echo "  - Superset dashboard import runs in background (~10-15 min); check /tmp/superset-import.log"
 echo "  - verisim-grocery self-bootstraps its grocery DB on first start"

@@ -37,8 +37,7 @@ confirm() {
 # is non-empty it means a previous deploy has left data behind; the user is
 # prompted to choose between a clean wipe or an in-place re-seed.
 EXISTING_DIRS=()
-for d in airflow postgres superset meltano cloudbeaver homepage \
-          dockhand; do
+for d in airflow postgres superset cloudbeaver homepage dockhand; do
     [ -d "$CONF/$d" ] && EXISTING_DIRS+=("$CONF/$d")
 done
 
@@ -94,12 +93,6 @@ cp $STACKS/superset/superset_config.py $CONF/superset/superset_config.py
 # setup.py — Python script run by the superset-setup container on first boot
 # to auto-provision the EDW database connection and import dashboards.
 cp $STACKS/superset/setup.py $CONF/superset/setup.py
-
-echo "=== Seeding meltano ==="
-mkdir -p $CONF/meltano
-# meltano.yml — declares the EL pipeline: tap-postgres (Verisim source)
-# → target-postgres (EDW destination), including connection settings.
-cp $STACKS/meltano/meltano.yml $CONF/meltano/meltano.yml
 
 echo "=== Seeding cloudbeaver workspace ==="
 mkdir -p $CONF/cloudbeaver/workspace/GlobalConfiguration/.dbeaver
