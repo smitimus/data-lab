@@ -35,16 +35,6 @@ loads as (
     join {{ ref('stg_transport_loads') }} tl on tl.load_id = li.load_id
 ),
 
-receipts as (
-    select
-        load_id,
-        receipt_id,
-        received_dt,
-        received_date
-    from {{ ref('stg_inv_receipts') }}
-    where load_id is not null
-),
-
 store_locs as (
     select location_id, location_name, city, state
     from {{ ref('stg_locations') }}
@@ -66,22 +56,9 @@ select
     l.load_status,
     l.departed_at,
     l.arrived_at,
-    l.hours_in_transit,
-    r.receipt_id,
-    r.received_date,
-    case
-        when r.received_dt is not null
-        then extract(epoch from (r.received_dt - o.order_dt)) / 3600.0
-    end                                                     as total_hours_order_to_receipt,
-    (r.receipt_id is not null)                              as is_delivered,
-    case
-        when r.received_dt is not null
-        then extract(epoch from (r.received_dt - o.order_dt)) / 3600.0 <= 48
-        else null
-    end                                                     as delivered_within_48h
+    l.hours_in_transit
 from orders o
 left join store_locs sl  on sl.location_id   = o.store_location_id
 left join fulfillment f  on f.store_order_id = o.order_id
 left join loads l        on l.store_order_id = o.order_id
-left join receipts r     on r.load_id        = l.load_id
 order by o.order_date desc, o.order_dt desc

@@ -7,9 +7,11 @@ renamed as (
         receipt_item_id,
         receipt_id,
         product_id,
-        quantity,
-        unit_cost,
-        line_total
+        product_name,
+        category,
+        quantity::numeric                       as quantity,
+        unit_cost::numeric                      as unit_cost,
+        line_total::numeric                     as line_total
     from source
 )
 

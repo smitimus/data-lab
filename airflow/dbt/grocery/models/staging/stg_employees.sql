@@ -10,16 +10,13 @@ renamed as (
         last_name,
         first_name || ' ' || last_name          as full_name,
         email,
-        hire_date,
-        termination_date,
+        hire_date::date                         as hire_date,
+        termination_date::date                  as termination_date,
         department,
         job_title,
-        hourly_rate,
+        hourly_rate::numeric                    as hourly_rate,
         status,
-        case
-            when termination_date is null then true
-            else false
-        end                                     as is_active,
+        (termination_date is null)              as is_active,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

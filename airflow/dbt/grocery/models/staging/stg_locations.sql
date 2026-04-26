@@ -11,11 +11,11 @@ renamed as (
         state,
         zip,
         phone,
-        opened_date,
+        opened_date::date                       as opened_date,
         location_type,
-        store_sqft,
-        num_aisles,
-        is_active,
+        store_sqft::int                         as store_sqft,
+        num_aisles::int                         as num_aisles,
+        is_active::boolean                      as is_active,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

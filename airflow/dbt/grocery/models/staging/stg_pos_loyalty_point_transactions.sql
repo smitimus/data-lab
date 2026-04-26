@@ -7,12 +7,12 @@ renamed as (
         pt_id,
         member_id,
         transaction_id,
-        points_earned,
-        points_redeemed,
+        points_earned::int                      as points_earned,
+        points_redeemed::int                    as points_redeemed,
         reason,
-        balance_after                           as points_balance_after,
-        reason = 'tier_upgrade'                 as tier_changed,
-        created_at,
+        balance_after::int                      as points_balance_after,
+        (reason = 'tier_upgrade')               as tier_changed,
+        created_at::timestamptz                 as created_at,
         _sdc_extracted_at                       as _extracted_at
     from source
 )
