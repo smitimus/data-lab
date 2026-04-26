@@ -17,6 +17,32 @@ Full analytics engineering stack pre-wired to Verisim Grocery as the data source
 **Seeded stacks** (init.sh copies stacks/ → conf/ before first start):
 - `superset`, `meltano`, `cloudbeaver`, `homepage`
 
+## One-Liner Installer (`install.sh`)
+
+`install.sh` is the entry point for fresh machines. It handles everything:
+Docker install → repo clone → secret generation → .env files → init → start.
+
+- Clones repo to `/opt/data-lab`; conf/ always a sibling: `/opt/conf`
+- Designed for `curl | bash` — uses `exec </dev/tty` to reconnect stdin for prompts
+- Re-run safe: skips existing `.env` files and an already-cloned repo
+- `vm.max_map_count` sysctl is silently blocked inside containers; install.sh
+  has a bypass prompt — OpenMetadata will not start without this set on the host
+
+## `.env.example` Placeholder Tokens
+
+`fill_env()` in `install.sh` replaces these tokens when generating `.env` files:
+
+| Token | Replaced with |
+|-------|--------------|
+| `YOUR_SERVER_IP` | detected LAN IP |
+| `YOUR_INSTALL_DIR` | repo clone path (e.g. `/opt/data-lab`) |
+| `YOUR_CONF_DIR` | conf path (e.g. `/opt/conf`) |
+| `YOUR_TIMEZONE` | system timezone |
+| `DETECT_ME_DOCKER_GID` | numeric GID of the `docker` group |
+| `GENERATE_ME_FERNET_KEY` | Airflow Fernet key |
+| `GENERATE_ME_SECRET` | shared Airflow + Superset session key |
+| `GENERATE_ME_ENCRYPTION_KEY` | Dockhand encryption key |
+
 ## Stack Lifecycle Scripts
 
 From `/opt/data-lab/` (or wherever the repo is cloned):
@@ -37,6 +63,12 @@ Changing start order breaks network dependencies.
 - **Sync:** `cd stacks && python global-env-sync.py` — pushes global vars to all service `.env` files
 - **Rule:** Docker Compose only reads `.env` from the same directory as `compose.yaml`. Never use `env_file:` directive.
 - **Override protection:** global-env-sync.py preserves lines with comments: `different`, `override`, `service-specific`, `custom`, `note`
+
+## Docker Compose Gotchas
+
+- **Colon in label values** — `homepage.description=` values containing `key: value`
+  patterns (e.g. `UI: no auth`) cause YAML parse errors. Quote the whole label:
+  `- "homepage.description=Grocery — UI: no auth"`
 
 ## Docker Compose Conventions
 
@@ -123,6 +155,14 @@ curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
 3. `mv stacks/<name> archive/stacks/<name>` and `mv conf/<name> archive/conf/<name>`
 4. Remove from: `start.sh`, `stop.sh`, `init.sh` (wipe-check list + mkdir + seed section), `setup.sh`
 5. Update CLAUDE.md active stacks list
+
+## Superset First-Run Notes
+
+- `superset init` (role/permission sync) takes **20–40 minutes** on first run — this is normal
+- The Superset container runs as a **non-root user** with `HOME=/app/superset_home`
+  (the bind-mounted conf volume). Pip user-installs (`~/.local`) hit the volume and
+  fail with permission errors. Install packages with `--target /tmp/pip-extra` and
+  set `PYTHONPATH` in the same shell.
 
 ## OpenMetadata Requirement
 
