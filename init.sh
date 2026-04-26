@@ -85,6 +85,10 @@ mkdir -p $CONF/dockhand                              # Dockhand app database (SQ
 
 echo "=== Seeding superset ==="
 mkdir -p $CONF/superset
+# pip-extra: world-writable dir so the non-root superset container user can install
+# psycopg2-binary here at init time; PYTHONPATH in compose.yaml points here so
+# both superset-init and the main superset container find the package.
+mkdir -p $CONF/superset/pip-extra && chmod 777 $CONF/superset/pip-extra
 # superset_config.py — main Superset configuration (DB URI, secret key, feature flags).
 cp $STACKS/superset/superset_config.py $CONF/superset/superset_config.py
 # setup.py — Python script run by the superset-setup container on first boot

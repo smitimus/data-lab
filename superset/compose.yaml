@@ -4,6 +4,7 @@
 # 260320 - added superset-setup service for auto-provisioning EDW connection + dashboard
 # 260320 - consolidated data/ into conf/
 # 260321 - added postgres_network to superset-setup for ORM chart→dashboard linking
+# 260425 - psycopg2 not in base image; install to shared volume, set PYTHONPATH for all services
 
 x-superset-env: &superset-env
   SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
@@ -11,6 +12,10 @@ x-superset-env: &superset-env
   POSTGRES_USER: ${POSTGRES_USER}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
   TZ: ${TZ}
+  # pip-extra is populated by superset-init on first run; init.sh creates it chmod 777
+  # so the non-root container user can write to it. All three superset containers
+  # inherit this so psycopg2 is found at startup without re-installing each time.
+  PYTHONPATH: /app/superset_home/pip-extra
 
 services:
   superset-init:
@@ -25,9 +30,8 @@ services:
       - "-c"
       - |
         python3 -c "import psycopg2" 2>/dev/null || {
-          echo "psycopg2 not in image, installing to /tmp..."
-          pip install --quiet --target /tmp/pip-extra psycopg2-binary
-          export PYTHONPATH="/tmp/pip-extra${PYTHONPATH:+:$PYTHONPATH}"
+          echo "psycopg2 not in image, installing to /app/superset_home/pip-extra..."
+          pip install --quiet --no-cache-dir --target /app/superset_home/pip-extra psycopg2-binary
         }
         echo "Waiting for postgres..."
         until python3 -c "
