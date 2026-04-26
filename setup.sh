@@ -13,7 +13,7 @@ STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Read the server IP from global.env — the same IP used in all service .env
 # files.  This avoids hard-coding the address and stays in sync with the rest
 # of the stack configuration.
-IP=$(grep '^IP=' "$STACKS/global.env" | cut -d= -f2)
+IP=$(grep '^IP=' "$STACKS/global.env" | cut -d= -f2 | sed 's/[[:space:]]*#.*//' | tr -d '[:space:]')
 DOCKHAND_URL="http://$IP:3000"
 
 # -----------------------------------------------------------------------------
