@@ -15,7 +15,7 @@ set -euo pipefail
 #   7.  Run global-env-sync.py to propagate globals
 #   8.  Run init.sh (seed conf/ dirs)
 #   9.  Run start.sh (bring up all stacks)
-#   10. Wait for Superset, then auto-import dashboards
+#   10. Launch background job: wait for Superset, then auto-import dashboards
 #   11. Print service table with URLs and default credentials
 # =============================================================
 
@@ -164,20 +164,20 @@ fill_env() {
 }
 
 # ------------------------------------------------------------
-# wait_for_superset — polls Superset's /health endpoint every 5 seconds
-# until it reports {"status": "OK"}.  Superset takes 1-3 minutes after
-# the container starts to become ready.  Times out after 60 seconds and
-# returns non-zero so the caller can skip the dashboard import gracefully.
+# wait_for_superset — polls Superset's /health endpoint every 10 seconds
+# until it reports {"status": "OK"}.  superset init (role/permission sync)
+# takes 20-40 minutes on first run; this is called from a background job so
+# install.sh can exit immediately and not block the user.
+# Times out after 2700 seconds (45 min) and returns non-zero on failure.
 # ------------------------------------------------------------
 wait_for_superset() {
-  log "Waiting for Superset to become healthy..."
-  local max=60 i=0
+  log "Waiting for Superset to become healthy (superset init takes 20-40 min on first run)..."
+  local max=2700 i=0
   while ! curl -sf http://localhost:8088/health | grep -q '"status".*"OK"'; do
-    sleep 5; i=$((i+5))
-    [[ $i -ge $max ]] && { warn "Superset not ready after ${max}s — skipping auto-import. Import dashboards manually."; return 1; }
-    echo -n "."
+    sleep 10; i=$((i+10))
+    [[ $i -ge $max ]] && { warn "Superset not ready after ${max}s — import dashboards manually."; return 1; }
+    [[ $((i % 60)) -eq 0 ]] && log "Still waiting for Superset... (${i}s elapsed)"
   done
-  echo ""
   log "Superset is healthy."
 }
 
@@ -388,14 +388,18 @@ main() {
   log "Starting all stacks..."
   bash start.sh
 
-  # --- Auto-import Superset dashboards -------------------------------------
-  # Waits for Superset to report healthy, then imports any pre-built dashboard
-  # zip files bundled in the repo via the Superset REST API.  The entire step
-  # is non-fatal: if Superset doesn't become ready in time, a warning is
-  # printed and dashboards can be imported manually later.
-  if wait_for_superset; then
-    import_dashboards
-  fi
+  # --- Auto-import Superset dashboards (background) ------------------------
+  # superset init takes 20-40 min on first run, so the wait+import runs in
+  # the background. install.sh exits immediately after printing the service
+  # table; the import completes on its own and logs to SUPERSET_LOG.
+  local SUPERSET_LOG=/tmp/superset-import.log
+  (
+    if wait_for_superset; then
+      import_dashboards
+      log "Dashboard import complete."
+    fi
+  ) >> "$SUPERSET_LOG" 2>&1 &
+  log "Superset dashboard import running in background — tail $SUPERSET_LOG to monitor"
 
   # --- Done ----------------------------------------------------------------
   print_services "$IP"
