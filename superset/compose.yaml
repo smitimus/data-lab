@@ -20,11 +20,33 @@ services:
       <<: *superset-env
     volumes:
       - ${CONF}/superset:/app/superset_home
-    command: [
-      "bash", "-c",
-      "pip install --quiet psycopg2-binary && superset db upgrade && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password $${SUPERSET_ADMIN_PASSWORD:-admin} && superset init"
-    ]
-    restart: on-failure
+    command:
+      - "bash"
+      - "-c"
+      - |
+        pip show psycopg2-binary > /dev/null 2>&1 || pip install --quiet psycopg2-binary
+        echo "Waiting for postgres..."
+        until python3 -c "
+        import psycopg2, os, sys
+        try:
+            psycopg2.connect(host='postgres', port=5432,
+                user=os.environ['POSTGRES_USER'],
+                password=os.environ['POSTGRES_PASSWORD'],
+                dbname='superset')
+            sys.exit(0)
+        except Exception:
+            sys.exit(1)
+        " 2>/dev/null; do sleep 5; done
+        echo "Postgres ready. Running db upgrade..."
+        superset db upgrade
+        superset fab create-admin \
+          --username admin --firstname Admin --lastname User \
+          --email admin@example.com \
+          --password "${SUPERSET_ADMIN_PASSWORD:-admin}" 2>&1 | grep -v "already exists" || true
+        echo "Running superset init (this can take 20+ minutes on first run)..."
+        superset init
+        echo "superset-init complete."
+    restart: "no"
     networks:
       - postgres_network
 
