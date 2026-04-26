@@ -70,6 +70,7 @@ fi
 # root-owned, which can cause permission errors inside some containers.
 echo "=== Creating runtime directories ==="
 mkdir -p $CONF/airflow/{logs,config,plugins,data}   # Airflow worker logs, DAG plugins, and data
+chmod 777 $CONF/airflow/logs                        # airflow runs as UID 50000; needs to create log subdirs
 mkdir -p $CONF/postgres/data                         # PostgreSQL data files (WAL, tables, indexes)
 mkdir -p $CONF/superset/data                         # Superset cache and export scratch space
 mkdir -p $CONF/openmetadata/{opensearch,server}      # OpenSearch index data and OM server state
