@@ -79,15 +79,16 @@ generate_encryption_key() {
 }
 
 fill_env() {
-  # Args: example target ip tz install_dir docker_gid fernet_key shared_secret enc_key
+  # Args: example target ip tz install_dir docker_gid fernet_key shared_secret enc_key conf_dir
   local example="$1" target="$2"
   local ip="$3" tz="$4" install_dir="$5" docker_gid="$6"
-  local fernet_key="$7" shared_secret="$8" enc_key="$9"
+  local fernet_key="$7" shared_secret="$8" enc_key="$9" conf_dir="${10}"
 
   sed \
     -e "s|YOUR_SERVER_IP|${ip}|g" \
     -e "s|YOUR_TIMEZONE|${tz}|g" \
     -e "s|YOUR_INSTALL_DIR|${install_dir}|g" \
+    -e "s|YOUR_CONF_DIR|${conf_dir}|g" \
     -e "s|DETECT_ME_DOCKER_GID|${docker_gid}|g" \
     -e "s|GENERATE_ME_FERNET_KEY|${fernet_key}|g" \
     -e "s|GENERATE_ME_SECRET|${shared_secret}|g" \
@@ -204,6 +205,7 @@ main() {
   IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}') || IP="127.0.0.1"
   TZ_VAL=$(cat /etc/timezone 2>/dev/null | head -1) || TZ_VAL="America/New_York"
   DOCKER_GID=$(getent group docker | cut -d: -f3) || DOCKER_GID="999"
+  CONF_DIR="$(dirname "$INSTALL_DIR")/conf"
   log "Detected IP: ${IP}, Timezone: ${TZ_VAL}, Docker GID: ${DOCKER_GID}"
 
   # Generate secrets — one Fernet key, one shared secret (Airflow/Superset), one Dockhand key
@@ -223,7 +225,7 @@ main() {
     fi
     fill_env "$example" "$target" \
       "$IP" "$TZ_VAL" "$INSTALL_DIR" "$DOCKER_GID" \
-      "$FERNET_KEY" "$SHARED_SECRET" "$DOCKHAND_KEY"
+      "$FERNET_KEY" "$SHARED_SECRET" "$DOCKHAND_KEY" "$CONF_DIR"
     log "Generated ${target}"
   done < <(find . -name '.env.example' -print0)
 
@@ -231,6 +233,7 @@ main() {
   sed -i \
     -e "s|YOUR_SERVER_IP|${IP}|g" \
     -e "s|YOUR_INSTALL_DIR|${INSTALL_DIR}|g" \
+    -e "s|YOUR_CONF_DIR|${CONF_DIR}|g" \
     -e "s|YOUR_TIMEZONE|${TZ_VAL}|g" \
     global.env
 

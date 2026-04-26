@@ -15,7 +15,7 @@ services:
       ## compose files and resolve relative volume paths without rewriting.
       ## Dockhand's path rewriter is unreliable with nested mounts;
       ## matching paths bypass it entirely.
-      - /opt/stacks:/opt/stacks
+      - ${STACKS}:${STACKS}
       - /opt/server:/opt/server
       - /opt/dockge:/opt/dockge
     environment:

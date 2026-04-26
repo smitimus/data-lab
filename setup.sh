@@ -45,7 +45,7 @@ read -r -s -p "Dockhand admin password [admin]: " DH_PASS
 DH_PASS=${DH_PASS:-admin}
 echo ""
 
-python3 "$STACKS/dockhand/adopt.py" --username "$DH_USER" --password "$DH_PASS"
+STACKS="$STACKS" python3 "$STACKS/dockhand/adopt.py" --username "$DH_USER" --password "$DH_PASS"
 
 # =============================================================================
 # Done

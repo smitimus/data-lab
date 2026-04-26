@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 
 DOCKHAND_URL = "http://localhost:3000"
-SCAN_DIRS = ["/opt/stacks", "/opt/server", "/opt/dockge"]
+SCAN_DIRS = [os.environ.get("STACKS", "/opt/stacks"), "/opt/server", "/opt/dockge"]
 
 
 def find_stacks():

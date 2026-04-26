@@ -163,7 +163,7 @@ services:
     command: sh -c "pip install --quiet requests && python /setup/setup.py"
     volumes:
       - ./setup/setup.py:/setup/setup.py:ro
-      - /opt/stacks/airflow/dbt:/dbt:ro
+      - ${STACKS}/airflow/dbt:/dbt:ro
     depends_on:
       openmetadata-server:
         condition: service_healthy
