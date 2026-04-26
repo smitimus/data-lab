@@ -45,7 +45,12 @@ echo "=== Starting all stacks ==="
 #    for monitoring while everything else comes up.
 start dockhand
 
-# 2. Postgres — shared EDW (Enterprise Data Warehouse) database.
+# 2. Homepage — service dashboard / landing page.
+#    Reads Docker labels dynamically at request time, so it's useful immediately
+#    and shows tiles as each service comes up. No dependencies on other stacks.
+start homepage
+
+# 3. Postgres — shared EDW (Enterprise Data Warehouse) database.
 #    Everything that stores persistent relational data depends on this:
 #    Airflow (task metadata), Superset (dashboard definitions), Meltano
 #    (pipeline state), and the grocery EDW itself.
@@ -56,26 +61,26 @@ start postgres
 echo "  Waiting 30s for postgres to initialize..."
 sleep 30
 
-# 3. Verisim Grocery — mock grocery data generator.
+# 4. Verisim Grocery — mock grocery data generator.
 #    All-in-one container (postgres + API + UI + generator).  Uses its own
 #    internal postgres on port 5499 as the data source; independent of the
 #    shared EDW postgres.
 start verisim-grocery
 
-# 4. Meltano — EL (Extract-Load) pipeline.
+# 5. Meltano — EL (Extract-Load) pipeline.
 #    Extracts grocery transaction data from the Verisim source DB and loads
 #    it into the EDW.  Installs its Singer tap/target plugins on first start
 #    (takes 3-5 minutes — watch with: docker logs meltano-init).
 start meltano
 
-# 5. Airflow — workflow orchestrator.
+# 6. Airflow — workflow orchestrator.
 #    Runs the grocery_pipeline DAG which calls Meltano (EL) and then dbt
 #    (transform).  Built locally because the image includes dbt and its
 #    dependencies baked in alongside the DAGs.
 #    Runs DB migrations on first start (1-2 minutes).
 start airflow build
 
-# 6. Superset — BI dashboards.
+# 7. Superset — BI dashboards.
 #    The superset-init container runs database migrations and creates the
 #    admin user before the main server starts.  On first run, `superset init`
 #    (role/permission sync) can take 20+ minutes — this is normal.
@@ -83,15 +88,10 @@ start airflow build
 #    accepting HTTP requests.
 start superset
 
-# 7. CloudBeaver — web-based database GUI.
+# 8. CloudBeaver — web-based database GUI.
 #    Pre-configured with connections to the EDW and Verisim source DB.
 #    No hard startup dependencies on other stacks.
 start cloudbeaver
-
-# 8. Homepage — service dashboard / landing page.
-#    Shows tiles for every running service with URLs and descriptions.
-#    Config was seeded from stacks/homepage/config/ by init.sh.
-start homepage
 
 # 9. dbt Docs — lightweight data catalog for dbt-managed models.
 #    Generates the dbt docs site (model lineage, columns, tests) and serves it.

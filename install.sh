@@ -15,8 +15,9 @@ set -euo pipefail
 #   7.  Run global-env-sync.py to propagate globals
 #   8.  Run init.sh (seed conf/ dirs)
 #   9.  Run start.sh (bring up all stacks)
-#   10. Launch background job: wait for Superset, then auto-import dashboards
-#   11. Print service table with URLs and default credentials
+#   10. Wait for Dockhand, then auto-adopt all stacks
+#   11. Launch background job: wait for Superset, then auto-import dashboards
+#   12. Print service table with URLs and default credentials
 # =============================================================
 
 # GitHub repo to clone and the preferred install location.
@@ -164,6 +165,27 @@ fill_env() {
 }
 
 # ------------------------------------------------------------
+# adopt_stacks — waits for Dockhand then bulk-adopts all stacks via adopt.py.
+# Non-fatal: prints a warning and continues if Dockhand doesn't come up.
+# ------------------------------------------------------------
+adopt_stacks() {
+  log "Waiting for Dockhand to become ready..."
+  local max=60 i=0
+  until curl -sf http://localhost:3000 -o /dev/null 2>/dev/null; do
+    sleep 3; i=$((i+3))
+    if [[ $i -ge $max ]]; then
+      warn "Dockhand not ready after ${max}s — run 'bash setup.sh' manually to adopt stacks."
+      return 0
+    fi
+  done
+  log "Dockhand is up — adopting stacks..."
+  STACKS="${INSTALL_DIR}" python3 "${INSTALL_DIR}/dockhand/adopt.py" \
+    --username admin --password admin \
+    && log "All stacks adopted into Dockhand." \
+    || warn "Stack adoption failed — run 'bash setup.sh' manually."
+}
+
+# ------------------------------------------------------------
 # wait_for_superset — polls Superset's /health endpoint every 10 seconds
 # until it reports {"status": "OK"}.  superset init (role/permission sync)
 # takes 20-40 minutes on first run; this is called from a background job so
@@ -238,8 +260,6 @@ print_services() {
   echo "Next steps:"
   echo "  1. Trigger the first Airflow DAG: Airflow UI → DAGs → grocery_pipeline → ▶"
   echo "  2. After the DAG completes, check Superset dashboards for data"
-  echo "  3. Run setup.sh to adopt all stacks in Dockhand:"
-  echo "     cd ${INSTALL_DIR} && bash setup.sh"
   echo ""
 }
 
@@ -387,6 +407,9 @@ main() {
   # order (postgres first, then all dependents).
   log "Starting all stacks..."
   bash start.sh
+
+  # --- Adopt stacks into Dockhand ------------------------------------------
+  adopt_stacks
 
   # --- Auto-import Superset dashboards (background) ------------------------
   # superset init takes 20-40 min on first run, so the wait+import runs in
