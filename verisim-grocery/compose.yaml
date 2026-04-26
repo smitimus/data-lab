@@ -30,5 +30,5 @@ services:
       - homepage.name=Verisim Grocery
       - homepage.icon=docker.png
       - homepage.href=http://${IP}:${VERISIM_UI_PORT:-8501}/
-      - homepage.description=Grocery data generator — UI: no auth | API: no auth | DB: verisim/verisim
+      - "homepage.description=Grocery data generator — UI: no auth | API: no auth | DB: verisim/verisim"
 

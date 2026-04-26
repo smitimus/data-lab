@@ -120,6 +120,7 @@ def parse_existing_env(file_path: Path, global_vars: Dict[str, str]) -> Tuple[Di
                     var_value = var_value[1:-1]
                 
                 # Check if this is a global variable or service-specific
+                in_header = False  # first variable line marks end of header
                 if var_name in global_vars:
                     # Only collect global vars if we're in the global section
                     if in_global_section or not seen_global_marker:
@@ -129,13 +130,15 @@ def parse_existing_env(file_path: Path, global_vars: Dict[str, str]) -> Tuple[Di
                         if comment_match:
                             existing_comments[var_name] = comment_match.group(1).strip()
                 else:
-                    # Service-specific variable - only collect if we're past global section
-                    if in_service_section or seen_global_marker:
+                    # Service-specific variable — collect when not inside global section.
+                    # This also handles flat .env files (fill_env output) with no section
+                    # markers, where in_global_section is always False.
+                    if not in_global_section:
                         service_specific_vars.append(original_line.rstrip('\n'))
             else:
                 # Non-variable line (comment, etc.) - only preserve if in service section
                 # Skip old/orphaned comments from global section
-                if in_service_section or (seen_service_marker and not in_global_section):
+                if in_service_section or (not in_global_section and not in_header):
                     # Only preserve if it's not an old header comment
                     if not (trimmed.startswith('# =================================') or 
                             trimmed.startswith('# Service:') or
