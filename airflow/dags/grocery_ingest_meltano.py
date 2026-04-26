@@ -52,6 +52,8 @@ docker exec postgres psql -U postgres -d grocery -c "
 """
 
 MELTANO_RUN = (
+    "docker exec postgres psql -U postgres -d grocery "
+    "-c 'DROP TABLE IF EXISTS \"raw_{schema}\".\"{table}\" CASCADE' ; "
     "docker exec meltano meltano --cwd /project el "
     "tap-postgres-grocery target-postgres-grocery "
     "--select '{stream}' "
@@ -144,7 +146,9 @@ with DAG(
             for task_name, stream in tables:
                 BashOperator(
                     task_id=task_name,
-                    bash_command=MELTANO_RUN.format(stream=stream),
+                    bash_command=MELTANO_RUN.format(
+                        schema=schema, table=task_name, stream=stream,
+                    ),
                     execution_timeout=timedelta(minutes=20),
                 )
         clear_schemas >> tg  # all schema groups wait for raw schemas to be cleared
