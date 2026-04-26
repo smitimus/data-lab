@@ -29,6 +29,10 @@ start() {
     echo "--- $name ---"
     if [ "$build" = "build" ]; then
         docker compose -f $dir/compose.yaml build --quiet
+    else
+        # Pull images explicitly before up -d. Without this, `up -d` can silently
+        # stall for hours waiting for a pull that never completes on fresh machines.
+        docker compose -f $dir/compose.yaml pull --quiet
     fi
     docker compose -f $dir/compose.yaml up -d
 }
