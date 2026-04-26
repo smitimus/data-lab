@@ -38,7 +38,7 @@ confirm() {
 # prompted to choose between a clean wipe or an in-place re-seed.
 EXISTING_DIRS=()
 for d in airflow postgres superset meltano cloudbeaver homepage \
-          openmetadata dockhand; do
+          dockhand; do
     [ -d "$CONF/$d" ] && EXISTING_DIRS+=("$CONF/$d")
 done
 
@@ -73,7 +73,6 @@ mkdir -p $CONF/airflow/{logs,config,plugins,data}   # Airflow worker logs, DAG p
 chmod 777 $CONF/airflow/logs                        # airflow runs as UID 50000; needs to create log subdirs
 mkdir -p $CONF/postgres/data                         # PostgreSQL data files (WAL, tables, indexes)
 mkdir -p $CONF/superset/data                         # Superset cache and export scratch space
-mkdir -p $CONF/openmetadata/{opensearch,server}      # OpenSearch index data and OM server state
 mkdir -p $CONF/dockhand                              # Dockhand app database (SQLite)
 
 # -----------------------------------------------------------------------------

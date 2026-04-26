@@ -92,12 +92,10 @@ start cloudbeaver
 #    Config was seeded from stacks/homepage/config/ by init.sh.
 start homepage
 
-# 9. OpenMetadata — data catalog and lineage tracker.
-#    Uses OpenSearch as its search and index backend, which requires the
-#    vm.max_map_count kernel setting (set by install.sh).
-#    Started last because it takes the longest to become healthy (2-3 min
-#    for the server, plus the setup container seeds connections afterward).
-start openmetadata
+# 9. dbt Docs — lightweight data catalog for dbt-managed models.
+#    Generates the dbt docs site (model lineage, columns, tests) and serves it.
+#    Started after airflow so the dbt project files are stable; needs postgres_network.
+start dbt-docs
 
 echo ""
 echo "=== All stacks started ==="
@@ -105,8 +103,7 @@ echo ""
 echo "Notes:"
 echo "  - Meltano installs plugins on first start (3-5 min) — check: docker logs meltano-init"
 echo "  - Airflow runs DB migrations on first start (1-2 min)"
-echo "  - Superset auto-provisions the Gas Station dashboard after becoming healthy
-  - verisim-grocery self-bootstraps its grocery DB on first start"
-echo "  - OpenMetadata: server takes 2-3 min; setup seeds connections after server is healthy"
-echo "  - OpenMetadata dbt pipeline: restart openmetadata-setup after first Airflow DAG run"
+echo "  - Superset auto-provisions the EDW dashboard after becoming healthy"
+echo "  - verisim-grocery self-bootstraps its grocery DB on first start"
+echo "  - dbt Docs: runs 'dbt docs generate' on startup (~30s) then serves on port 8082"
 echo ""

@@ -1,0 +1,42 @@
+# dbt Docs — Data catalog and lineage for dbt-managed models
+# 260426 - initial setup: replaces OpenMetadata for lightweight discoverability
+
+services:
+  dbt-docs:
+    container_name: dbt-docs
+    image: ghcr.io/dbt-labs/dbt-postgres:latest
+    environment:
+      TZ: ${TZ}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${STACKS}/airflow/dbt/grocery:/usr/app/dbt
+      - ${STACKS}/dbt-docs/profiles.yml:/root/.dbt/profiles.yml:ro
+    working_dir: /usr/app/dbt
+    command: >
+      bash -c "
+        echo 'Waiting for postgres...' &&
+        until dbt debug --quiet 2>/dev/null; do sleep 5; done &&
+        echo 'Generating docs...' &&
+        dbt docs generate &&
+        echo 'Serving docs...' &&
+        dbt docs serve --host 0.0.0.0 --port 8080
+      "
+    ports:
+      - "${DBT_DOCS_PORT:-8082}:8080"
+    restart: unless-stopped
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=dbt Docs
+      - homepage.icon=dbt.png
+      - homepage.href=http://${IP}:${DBT_DOCS_PORT:-8082}/
+      - homepage.description=Data catalog — dbt model lineage, columns, and tests
+    networks:
+      - postgres_network
+
+networks:
+  postgres_network:
+    external: true
+    name: postgres_postgres_network

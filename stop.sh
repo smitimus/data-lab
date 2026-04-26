@@ -26,7 +26,7 @@ echo "=== Stopping all stacks ==="
 # before the services they depend on.  Stopping postgres before Airflow, for
 # example, would cause Airflow to log connection errors during shutdown.
 
-stop openmetadata     # Data catalog — no other stack depends on it
+stop dbt-docs         # Data catalog — no other stack depends on it
 stop homepage         # Landing page — no dependencies
 stop cloudbeaver      # Database GUI — no dependencies
 stop superset         # BI layer — depends on postgres (stopped later)
