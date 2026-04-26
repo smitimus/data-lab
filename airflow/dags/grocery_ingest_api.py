@@ -342,7 +342,7 @@ def ingest_table(
         # with a different schema), drop it so _ensure_table recreates it correctly.
         if table_exists and pk_col not in raw_cols:
             with conn.cursor() as cur:
-                cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}"')
+                cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}" CASCADE')
             conn.commit()
             log.info("[%s] dropped %s.%s (pk_col missing — wrong schema)", task_id, raw_schema, raw_table)
             raw_cols = []
@@ -351,7 +351,7 @@ def ingest_table(
         if strategy == "full":
             if table_exists:
                 with conn.cursor() as cur:
-                    cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}"')
+                    cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}" CASCADE')
                 conn.commit()
                 log.info("[%s] dropped %s.%s for full reload", task_id, raw_schema, raw_table)
                 raw_cols = []
