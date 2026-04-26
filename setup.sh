@@ -6,7 +6,7 @@
 
 set -e
 
-STACKS=/opt/stacks
+STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IP=$(grep '^IP=' "$STACKS/global.env" | cut -d= -f2)
 DOCKHAND_URL="http://$IP:3000"
 

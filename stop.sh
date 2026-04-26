@@ -4,7 +4,7 @@
 # conf/ data is preserved — run init.sh to wipe and reinitialize.
 # =============================================================================
 
-STACKS=/opt/stacks
+STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 stop() {
     local name=$1

@@ -8,8 +8,8 @@
 
 set -e
 
-CONF=/opt/conf
-STACKS=/opt/stacks
+STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONF="$(dirname "$STACKS")/conf"
 
 # -----------------------------------------------------------------------------
 # Prompt helper: ask yes/no, default yes

@@ -6,7 +6,7 @@
 
 set -e
 
-STACKS=/opt/stacks
+STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 start() {
     local name=$1
