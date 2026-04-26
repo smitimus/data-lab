@@ -11,9 +11,11 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DBT_PROFILES_DIR: /usr/app
+    user: "50000:0"
     volumes:
       - ${STACKS}/airflow/dbt/grocery:/usr/app/dbt
-      - ${STACKS}/dbt-docs/profiles.yml:/root/.dbt/profiles.yml:ro
+      - ${STACKS}/dbt-docs/profiles.yml:/usr/app/profiles.yml:ro
     working_dir: /usr/app/dbt
     entrypoint:
       - bash
