@@ -228,28 +228,26 @@ def _get_watermark(conn, schema: str, table: str, col: str) -> str:
     return result.isoformat() if isinstance(result, datetime) else str(result)
 
 
-def _fetch_all(path: str, params: dict) -> list:
-    """Paginate through API endpoint, return all rows."""
+def _fetch_pages(path: str, params: dict):
+    """Generator: yield one page of rows at a time, never accumulating all rows in memory."""
     url = f"{API_BASE}{path}"
-    rows = []
     offset = 0
     while True:
         p = {**params, "limit": PAGE_SIZE, "offset": offset}
         resp = requests.get(url, params=p, timeout=60)
         if resp.status_code >= 500:
             log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
-            return rows
+            return
         resp.raise_for_status()
         data = resp.json()
         page = data if isinstance(data, list) else data.get("data", [])
         if not page:
-            break
-        rows.extend(page)
+            return
         log.info("  %s: fetched %d rows (offset=%d)", path, len(page), offset)
+        yield page
         if len(page) < PAGE_SIZE:
-            break
+            return
         offset += PAGE_SIZE
-    return rows
 
 
 def _coerce(val: Any) -> Any:
@@ -358,7 +356,7 @@ def ingest_table(
                 log.info("[%s] dropped %s.%s for full reload", task_id, raw_schema, raw_table)
                 raw_cols = []
                 table_exists = False
-            rows = _fetch_all(api_path, {})
+            fetch_params: dict = {}
 
         else:  # incremental
             if params_conf.get("start_dt") and params_conf.get("end_dt"):
@@ -378,19 +376,21 @@ def ingest_table(
             # Some endpoints expect date-only (YYYY-MM-DD) not full ISO timestamps
             def _fmt(val, param):
                 return val[:10] if param and param.endswith("_date") else val
-            rows = _fetch_all(api_path, {
+            fetch_params = {
                 api_start_param: _fmt(start, api_start_param),
                 api_end_param:   _fmt(end,   api_end_param),
-            })
+            }
 
-        # Auto-create table from first API row on first run
-        if not table_exists and rows:
-            _ensure_table(conn, raw_schema, raw_table, pk_col, rows[0])
-            raw_cols = _raw_columns(conn, raw_schema, raw_table)
-            log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
+        # Stream page-by-page into Postgres — never hold the full dataset in memory
+        written = 0
+        for page in _fetch_pages(api_path, fetch_params):
+            if not table_exists:
+                _ensure_table(conn, raw_schema, raw_table, pk_col, page[0])
+                raw_cols = _raw_columns(conn, raw_schema, raw_table)
+                table_exists = True
+                log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
+            written += _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
 
-        log.info("[%s] fetched %d total rows", task_id, len(rows))
-        written = _upsert_rows(conn, raw_schema, raw_table, rows, pk_col, raw_cols, now_iso)
         log.info("[%s] wrote %d rows to %s.%s", task_id, written, raw_schema, raw_table)
 
     finally:
