@@ -2,7 +2,7 @@
 
 A full analytics engineering stack with realistic grocery store mock data, pre-wired and ready to explore. One command on a fresh Debian machine gives you a complete data pipeline.
 
-**Stack:** Verisim Grocery (mock data) → Meltano (EL) → PostgreSQL EDW → dbt (transform) → Superset (BI) + OpenMetadata (catalog) + CloudBeaver (DB IDE) + Airflow (orchestration)
+**Stack:** Verisim Grocery (mock data) → Meltano (EL) → PostgreSQL EDW → dbt (transform) → Superset (BI) + dbt Docs (catalog) + CloudBeaver (DB IDE) + Airflow (orchestration)
 
 ---
 
@@ -26,7 +26,7 @@ Verisim Grocery          →  Meltano EL            →  PostgreSQL EDW
                              dbt (Airflow)
                         (staging → mart models)
                                     ↓
-                     Superset (dashboards) + OpenMetadata (catalog)
+                     Superset (dashboards) + dbt Docs (catalog)
 ```
 
 | Service | URL | Credentials | Purpose |
@@ -35,7 +35,7 @@ Verisim Grocery          →  Meltano EL            →  PostgreSQL EDW
 | Airflow | http://SERVER_IP:8080 | admin / admin | Pipeline orchestration |
 | Superset | http://SERVER_IP:8088 | admin / admin | BI dashboards |
 | CloudBeaver | http://SERVER_IP:8978 | set on first login | Database IDE |
-| OpenMetadata | http://SERVER_IP:8585 | admin / admin | Data catalog |
+| dbt Docs | http://SERVER_IP:8082 | no auth | Data catalog |
 | Dockhand | http://SERVER_IP:3000 | admin / admin | Docker management |
 | Verisim UI | http://SERVER_IP:8501 | no auth | Generator control |
 | Verisim API | http://SERVER_IP:8010/docs | no auth | REST API |
@@ -69,14 +69,7 @@ sudo usermod -aG docker $USER
 
 Log out and back in for the group change to take effect.
 
-### 2. Set OpenMetadata kernel parameter
-
-```bash
-sudo sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
-```
-
-### 3. Clone and configure
+### 2. Clone and configure
 
 ```bash
 git clone https://github.com/smitimus/data-lab.git /opt/data-lab
@@ -86,18 +79,18 @@ cd /opt/data-lab
 nano global.env
 
 # Generate .env files from templates
-for d in airflow postgres meltano superset cloudbeaver homepage openmetadata dockhand verisim-grocery; do
+for d in airflow postgres meltano superset cloudbeaver homepage dbt-docs dockhand verisim-grocery; do
   cp $d/.env.example $d/.env
 done
 
 # Generate secrets and replace placeholders (or edit manually)
 FERNET=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 SECRET=$(openssl rand -base64 42)
-sed -i "s|GENERATE_ME_FERNET_KEY|${FERNET}|g" airflow/.env openmetadata/.env
-sed -i "s|GENERATE_ME_SECRET|${SECRET}|g" airflow/.env openmetadata/.env superset/.env
+sed -i "s|GENERATE_ME_FERNET_KEY|${FERNET}|g" airflow/.env
+sed -i "s|GENERATE_ME_SECRET|${SECRET}|g" airflow/.env superset/.env
 sed -i "s|GENERATE_ME_ENCRYPTION_KEY|$(openssl rand -base64 32)|g" dockhand/.env
 DGID=$(getent group docker | cut -d: -f3)
-sed -i "s|DETECT_ME_DOCKER_GID|${DGID}|g" airflow/.env openmetadata/.env
+sed -i "s|DETECT_ME_DOCKER_GID|${DGID}|g" airflow/.env
 
 python3 global-env-sync.py
 ```
@@ -124,7 +117,7 @@ bash start.sh
    - Runs Meltano EL + dbt staging + dbt marts + dbt tests (~2–5 min)
 2. **Check Superset dashboards** — data appears after the first successful DAG run
 3. **Adopt stacks in Dockhand:** `bash setup.sh` (or follow prompts)
-4. **OpenMetadata dbt lineage** — auto-ingested after the first DAG run generates `manifest.json`
+4. **dbt Docs catalog** — browse model lineage and columns at `http://SERVER_IP:8082`
 
 ---
 
@@ -140,7 +133,7 @@ Each service has its own README with access details, config files, and usage not
 | Superset | [superset/README.md](superset/README.md) |
 | CloudBeaver | [cloudbeaver/README.md](cloudbeaver/README.md) |
 | Homepage | [homepage/README.md](homepage/README.md) |
-| OpenMetadata | [openmetadata/README.md](openmetadata/README.md) |
+| dbt Docs | [dbt-docs/compose.yaml](dbt-docs/compose.yaml) |
 | Dockhand | [dockhand/README.md](dockhand/README.md) |
 | Verisim Grocery | [verisim-grocery/README.md](verisim-grocery/README.md) |
 

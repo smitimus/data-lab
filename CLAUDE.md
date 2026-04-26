@@ -1,6 +1,6 @@
 # Claude Context — Data Lab (`stacks/`)
 
-Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Meltano EL → postgres/edw → dbt → Superset + OpenMetadata.
+Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Meltano EL → postgres/edw → dbt → Superset + dbt Docs.
 
 ## Directory Structure
 
@@ -25,9 +25,6 @@ Docker install → repo clone → secret generation → .env files → init → 
 - Clones repo to `/opt/data-lab`; conf/ always a sibling: `/opt/conf`
 - Designed for `curl | bash` — uses `exec </dev/tty` to reconnect stdin for prompts
 - Re-run safe: skips existing `.env` files and an already-cloned repo
-- `vm.max_map_count` sysctl is silently blocked inside containers; install.sh
-  has a bypass prompt — OpenMetadata will not start without this set on the host
-
 ## `.env.example` Placeholder Tokens
 
 `fill_env()` in `install.sh` replaces these tokens when generating `.env` files:
@@ -164,12 +161,3 @@ curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
   fail with permission errors. Install packages with `--target /tmp/pip-extra` and
   set `PYTHONPATH` in the same shell.
 
-## OpenMetadata Requirement
-
-OpenSearch (used by OpenMetadata) requires:
-```bash
-sudo sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
-```
-
-The installer sets this automatically.

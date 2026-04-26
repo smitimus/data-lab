@@ -52,7 +52,7 @@ banner() {
   echo ""
   echo "This script will install a full analytics engineering stack:"
   echo "  • Docker Engine (if not already installed)"
-  echo "  • Airflow + Meltano + dbt + Superset + OpenMetadata"
+  echo "  • Airflow + Meltano + dbt + Superset + dbt Docs"
   echo "  • CloudBeaver + Homepage + Dockhand + PostgreSQL"
   echo "  • Verisim Grocery (mock data generator)"
   echo ""
@@ -228,7 +228,7 @@ print_services() {
   printf "%-20s %-38s %-20s\n" "Airflow"        "http://${ip}:8080"       "admin / admin"
   printf "%-20s %-38s %-20s\n" "Superset"       "http://${ip}:8088"       "admin / admin"
   printf "%-20s %-38s %-20s\n" "CloudBeaver"    "http://${ip}:8978"       "set on first login"
-  printf "%-20s %-38s %-20s\n" "OpenMetadata"   "http://${ip}:8585"       "admin / admin"
+  printf "%-20s %-38s %-20s\n" "dbt Docs"       "http://${ip}:8082"       "no auth"
   printf "%-20s %-38s %-20s\n" "Dockhand"       "http://${ip}:3000"       "admin / admin"
   printf "%-20s %-38s %-20s\n" "Verisim UI"     "http://${ip}:8501"       "no auth"
   printf "%-20s %-38s %-20s\n" "Verisim API"    "http://${ip}:8010/docs"  "no auth"
@@ -384,7 +384,7 @@ main() {
   bash init.sh
 
   # start.sh brings up every Docker Compose stack in the correct dependency
-  # order (postgres first, OpenMetadata last).
+  # order (postgres first, then all dependents).
   log "Starting all stacks..."
   bash start.sh
 
