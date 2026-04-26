@@ -73,6 +73,20 @@ def main():
         print(f"ERROR: Could not connect to Dockhand — {e}")
         sys.exit(1)
 
+    # Ensure an environment exists; create "local" if none do
+    auth_headers = {"Cookie": cookie} if cookie else None
+    body, _ = request("GET", "/api/environments", headers=auth_headers)
+    envs = json.loads(body)
+    if envs:
+        env_id = envs[0]["id"]
+        print(f"Using existing environment: {envs[0]['name']} (id={env_id})")
+    else:
+        print("No environments found — creating 'local'...")
+        body, _ = request("POST", "/api/environments",
+                          {"name": "local"}, headers=auth_headers)
+        env_id = json.loads(body)["id"]
+        print(f"Created environment id={env_id}")
+
     # Discover stacks
     stacks = find_stacks()
     print(f"Found {len(stacks)} stacks:")
@@ -81,11 +95,11 @@ def main():
 
     # Adopt
     print("\nAdopting stacks...")
-    payload = {"stacks": stacks, "environmentId": 1}
+    payload = {"stacks": stacks, "environmentId": env_id}
     try:
         body, _ = request(
             "POST", "/api/stacks/adopt", payload,
-            headers={"Cookie": cookie} if cookie else None,
+            headers=auth_headers,
         )
     except urllib.error.HTTPError as e:
         print(f"ERROR: Adopt request failed ({e.code}): {e.read().decode()}")
