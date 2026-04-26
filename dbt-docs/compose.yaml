@@ -15,15 +15,11 @@ services:
       - ${STACKS}/airflow/dbt/grocery:/usr/app/dbt
       - ${STACKS}/dbt-docs/profiles.yml:/root/.dbt/profiles.yml:ro
     working_dir: /usr/app/dbt
-    command: >
-      bash -c "
-        echo 'Waiting for postgres...' &&
-        until dbt debug --quiet 2>/dev/null; do sleep 5; done &&
-        echo 'Generating docs...' &&
-        dbt docs generate &&
-        echo 'Serving docs...' &&
-        dbt docs serve --host 0.0.0.0 --port 8080
-      "
+    entrypoint: ["bash", "-c"]
+    command: >-
+      until dbt debug --quiet 2>/dev/null; do sleep 5; done &&
+      dbt docs generate &&
+      dbt docs serve --host 0.0.0.0 --port 8080
     ports:
       - "${DBT_DOCS_PORT:-8082}:8080"
     restart: unless-stopped
