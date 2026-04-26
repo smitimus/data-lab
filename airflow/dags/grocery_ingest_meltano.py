@@ -34,6 +34,23 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.utils.task_group import TaskGroup
 
+# pipelinewise-tap-postgres FULL_TABLE replication generates a timestamp-based
+# surrogate PK column (e.g. product_id_20260426_1428) that changes each run.
+# Dropping raw schemas before each run lets pipelinewise recreate tables fresh,
+# avoiding NOT NULL violations from the previous run's surrogate key columns.
+CLEAR_RAW_SCHEMAS = """
+docker exec postgres psql -U postgres -d grocery -c "
+  DROP SCHEMA IF EXISTS raw_hr CASCADE;
+  DROP SCHEMA IF EXISTS raw_pos CASCADE;
+  DROP SCHEMA IF EXISTS raw_timeclock CASCADE;
+  DROP SCHEMA IF EXISTS raw_ordering CASCADE;
+  DROP SCHEMA IF EXISTS raw_fulfillment CASCADE;
+  DROP SCHEMA IF EXISTS raw_transport CASCADE;
+  DROP SCHEMA IF EXISTS raw_inv CASCADE;
+  DROP SCHEMA IF EXISTS raw_pricing CASCADE;
+"
+"""
+
 MELTANO_RUN = (
     "docker exec meltano meltano --cwd /project el "
     "tap-postgres-grocery target-postgres-grocery "
@@ -117,7 +134,10 @@ with DAG(
     tags=["grocery", "meltano", "ingest", "granular"],
 ) as dag:
 
-    schema_groups = {}
+    clear_schemas = BashOperator(
+        task_id="clear_raw_schemas",
+        bash_command=CLEAR_RAW_SCHEMAS,
+    )
 
     for schema, tables in SCHEMA_TABLES.items():
         with TaskGroup(group_id=f"ingest_{schema}") as tg:
@@ -127,6 +147,4 @@ with DAG(
                     bash_command=MELTANO_RUN.format(stream=stream),
                     execution_timeout=timedelta(minutes=20),
                 )
-        schema_groups[schema] = tg
-
-    # All schema groups run in parallel (no cross-schema dependencies at ingest)
+        clear_schemas >> tg  # all schema groups wait for raw schemas to be cleared
