@@ -46,29 +46,31 @@ def main():
     parser.add_argument("--username", default="admin")
     args = parser.parse_args()
 
-    # Login
+    # Login (optional — Dockhand may have auth disabled)
+    cookie = None
     print(f"Logging in to {DOCKHAND_URL} as {args.username}...")
     try:
         body, headers = request(
             "POST", "/api/auth/login",
             {"username": args.username, "password": args.password},
         )
+        for header, value in headers.items():
+            if header.lower() == "set-cookie":
+                cookie = value.split(";")[0]
+                break
+        if cookie:
+            print("Authenticated.")
+        else:
+            print("Login returned no cookie — proceeding without auth.")
     except urllib.error.URLError as e:
         print(f"ERROR: Could not connect to Dockhand — {e}")
         sys.exit(1)
     except urllib.error.HTTPError as e:
-        print(f"ERROR: Login failed ({e.code}) — check credentials")
-        sys.exit(1)
-
-    # Extract session cookie
-    cookie = None
-    for header, value in headers.items():
-        if header.lower() == "set-cookie":
-            cookie = value.split(";")[0]
-            break
-    if not cookie:
-        print("ERROR: No session cookie returned — login may have failed")
-        sys.exit(1)
+        if e.code == 400 and b"not enabled" in e.read():
+            print("Auth not enabled — proceeding without login.")
+        else:
+            print(f"ERROR: Login failed ({e.code}) — check credentials")
+            sys.exit(1)
 
     # Discover stacks
     stacks = find_stacks()
