@@ -37,7 +37,9 @@ from airflow.utils.task_group import TaskGroup
 MELTANO_RUN = (
     "docker exec meltano meltano --cwd /project el "
     "tap-postgres-grocery target-postgres-grocery "
-    "--select '{stream}'"
+    "--select '{stream}' "
+    "--state-id grocery-{stream} "
+    "--force"
 )
 
 default_args = {
