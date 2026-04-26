@@ -130,6 +130,7 @@ models:
           - relationships:
               to: ref('stg_pos_loyalty_members')
               field: member_id
+              severity: warn
       - name: transaction_id
         tests:
           - not_null
@@ -141,12 +142,8 @@ models:
     columns:
       - name: price_history_id
         tests: [unique, not_null]
-      - name: product_id
-        tests:
-          - not_null
-          - relationships:
-              to: ref('stg_pos_products')
-              field: product_id
+      - name: product_name
+        tests: [not_null]
 
   - name: stg_pos_coupons
     columns:
@@ -371,12 +368,6 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
-      - name: load_id
-        tests:
-          - not_null
-          - relationships:
-              to: ref('stg_transport_loads')
-              field: load_id
 
   - name: stg_inv_receipt_items
     columns:

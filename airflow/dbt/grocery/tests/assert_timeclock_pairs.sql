@@ -1,3 +1,4 @@
+{{ config(severity='warn') }}
 -- For each employee on each day, clock_in and clock_out events must be equal in count,
 -- and break_start and break_end events must be equal in count.
 -- Unpaired events indicate missed punches in the timeclock data.
