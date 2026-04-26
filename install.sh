@@ -240,9 +240,17 @@ main() {
 
   # OpenMetadata sysctl requirement
   log "Setting vm.max_map_count=262144 (required for OpenMetadata/OpenSearch)..."
-  sysctl -w vm.max_map_count=262144
-  if ! grep -q "vm.max_map_count" /etc/sysctl.conf; then
-    echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+  if sysctl -w vm.max_map_count=262144 2>/dev/null; then
+    if ! grep -q "vm.max_map_count" /etc/sysctl.conf 2>/dev/null; then
+      echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+    fi
+  else
+    warn "Could not set vm.max_map_count (permission denied — likely a container environment)."
+    warn "OpenMetadata/OpenSearch may fail to start without it."
+    warn "To fix on the host: sudo sysctl -w vm.max_map_count=262144"
+    echo ""
+    echo -n "Continue anyway? (y/N) "; read -r sysctl_ans
+    [[ "$sysctl_ans" =~ ^[Yy]$ ]] || exit 1
   fi
 
   # Init + start
