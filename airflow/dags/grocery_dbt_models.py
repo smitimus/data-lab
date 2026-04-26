@@ -13,8 +13,8 @@ Dependency structure:
   Each mart declares explicit upstream staging deps.
   dbt_test runs in parallel with marts after staging completes.
 
-Schedule: None — trigger manually or chain after grocery_ingest_tables.
-For automated runs use grocery_pipeline (all-in-one).
+Schedule: None — trigger manually or chain after grocery_ingest_meltano.
+For automated runs use grocery_complete_pipeline (all-in-one).
 
 Models (22 staging + 12 mart):
   Staging: stg_locations, stg_employees, stg_pos_departments, stg_pos_products,

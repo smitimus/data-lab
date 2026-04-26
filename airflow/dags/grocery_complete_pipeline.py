@@ -34,7 +34,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="grocery_pipeline",
+    dag_id="grocery_complete_pipeline",
     description="Meltano ingest Verisim grocery → EDW raw (22 tables) → dbt staging + marts",
     default_args=default_args,
     start_date=datetime(2026, 1, 1),

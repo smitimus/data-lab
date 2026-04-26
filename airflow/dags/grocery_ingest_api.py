@@ -13,7 +13,7 @@ For a full historical backfill, pass DAG params:
   {"start_dt": "2026-01-01T00:00:00", "end_dt": "2026-03-22T23:59:59"}
 Incremental tables will use those bounds instead of the watermark.
 
-Tables: 27 across 8 schemas (same coverage as grocery_ingest_tables / Meltano).
+Tables: 27 across 8 schemas (same coverage as grocery_ingest_meltano / Meltano).
 
 Schedule: None — trigger manually or via Airflow API.
 """
@@ -256,6 +256,24 @@ def _coerce(val: Any) -> Any:
     return val
 
 
+def _ensure_table(conn, schema: str, table: str, pk_col: str, sample_row: dict) -> None:
+    """Create schema and table from a sample API row if they don't exist."""
+    cols = [c for c in sample_row.keys() if not c.startswith("_sdc")]
+    col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
+    with conn.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS "{schema}"."{table}" (
+                {col_defs},
+                "_sdc_extracted_at" TEXT,
+                "_sdc_batched_at"   TEXT,
+                "_sdc_deleted_at"   TEXT,
+                PRIMARY KEY ("{pk_col}")
+            )
+        """)
+    conn.commit()
+
+
 def _upsert_rows(conn, schema: str, table: str, rows: list,
                  pk_col: str, raw_cols: list, extracted_at: str) -> int:
     """Upsert rows into raw table; sets _sdc metadata columns. Returns count."""
@@ -310,14 +328,21 @@ def ingest_table(
 
     conn = _edw_conn()
     try:
+        # Ensure schema exists before any table operation
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{raw_schema}"')
+        conn.commit()
+
         raw_cols = _raw_columns(conn, raw_schema, raw_table)
+        table_exists = bool(raw_cols)
         log.info("[%s] raw table columns: %s", task_id, raw_cols)
 
         if strategy == "full":
-            with conn.cursor() as cur:
-                cur.execute(f'TRUNCATE TABLE "{raw_schema}"."{raw_table}"')
-            conn.commit()
-            log.info("[%s] truncated %s.%s", task_id, raw_schema, raw_table)
+            if table_exists:
+                with conn.cursor() as cur:
+                    cur.execute(f'TRUNCATE TABLE "{raw_schema}"."{raw_table}"')
+                conn.commit()
+                log.info("[%s] truncated %s.%s", task_id, raw_schema, raw_table)
             rows = _fetch_all(api_path, {})
 
         else:  # incremental
@@ -325,12 +350,23 @@ def ingest_table(
                 start = params_conf["start_dt"]
                 end = params_conf["end_dt"]
                 log.info("[%s] param window: %s → %s", task_id, start, end)
-            else:
+            elif table_exists:
                 start = _get_watermark(conn, raw_schema, raw_table, watermark_col)
                 end = now_iso
                 log.info("[%s] watermark window: %s → %s", task_id, start, end)
+            else:
+                fb = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_FALLBACK_DAYS)
+                start = fb.isoformat()
+                end = now_iso
+                log.info("[%s] no table yet — fallback window: %s → %s", task_id, start, end)
 
             rows = _fetch_all(api_path, {api_start_param: start, api_end_param: end})
+
+        # Auto-create table from first API row on first run
+        if not table_exists and rows:
+            _ensure_table(conn, raw_schema, raw_table, pk_col, rows[0])
+            raw_cols = _raw_columns(conn, raw_schema, raw_table)
+            log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
 
         log.info("[%s] fetched %d total rows", task_id, len(rows))
         written = _upsert_rows(conn, raw_schema, raw_table, rows, pk_col, raw_cols, now_iso)

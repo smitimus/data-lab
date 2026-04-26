@@ -13,7 +13,7 @@ Meltano command uses `meltano el` with `--select` to target a single stream.
 Stream naming: pipelinewise-tap-postgres uses '<schema>-<table>' format.
 
 Schedule: None — trigger manually or via Airflow API.
-For automated runs use grocery_pipeline (all-in-one).
+For automated runs use grocery_complete_pipeline (all-in-one).
 
 Tables covered (27 streams across 8 schemas):
   hr (3): locations, employees, schedules
@@ -105,7 +105,7 @@ SCHEMA_TABLES = {
 # ---------------------------------------------------------------------------
 
 with DAG(
-    dag_id="grocery_ingest_tables",
+    dag_id="grocery_ingest_meltano",
     description="Per-table Meltano ingestion for grocery source (27 tables, 8 schemas)",
     default_args=default_args,
     start_date=datetime(2026, 1, 1),
