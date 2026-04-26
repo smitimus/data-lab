@@ -227,10 +227,21 @@ import_dashboards() {
   for zip in "${INSTALL_DIR}"/superset/dashboards/*.zip; do
     [[ -f "$zip" ]] || continue
     log "Importing dashboard: $(basename "$zip")"
+    # Build passwords JSON from every databases/*.yaml found in the zip,
+    # all using the shared postgres superuser password.
+    local pw_json
+    pw_json=$(python3 -c "
+import zipfile, json, sys
+with zipfile.ZipFile('${zip}') as z:
+    dbs = [n.split('/', 1)[1] for n in z.namelist()
+           if '/databases/' in n and n.endswith('.yaml')]
+    print(json.dumps({db: 'postgres' for db in dbs}))
+")
     curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
       -H "Authorization: Bearer $token" \
+      -H "Accept: application/json" \
       -F "formData=@${zip}" \
-      -F 'passwords={"databases/EDW.yaml":"postgres"}' \
+      -F "passwords=${pw_json}" \
       > /dev/null && log "Imported $(basename "$zip")" || warn "Failed to import $(basename "$zip")"
   done
 }

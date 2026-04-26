@@ -1,6 +1,6 @@
 # Claude Context — Data Lab (`stacks/`)
 
-Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Meltano EL → postgres/edw → dbt → Superset + dbt Docs.
+Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Meltano EL → postgres/grocery → dbt → Superset + dbt Docs.
 
 ## Directory Structure
 
@@ -107,8 +107,8 @@ Profiles: `stacks/airflow/dbt/profiles.yml`
 ## PostgreSQL Access
 
 ```bash
-docker exec postgres psql -U postgres -d edw -c "SELECT ..."
-docker exec postgres psql -U postgres -d edw    # interactive
+docker exec postgres psql -U postgres -d grocery -c "SELECT ..."
+docker exec postgres psql -U postgres -d grocery    # interactive (EDW; dbt models land here)
 ```
 
 Verisim source DB (separate container):
@@ -142,7 +142,7 @@ Import via API (used in install.sh):
 curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
   -H "Authorization: Bearer $TOKEN" \
   -F "formData=@stacks/superset/dashboards/verisim_grocery_dashboards.zip" \
-  -F 'passwords={"databases/EDW.yaml":"postgres"}'
+  -F 'passwords={"databases/Gas_Station.yaml":"postgres","databases/Grocery.yaml":"postgres"}'
 ```
 
 ## Archiving a Stack
