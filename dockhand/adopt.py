@@ -62,15 +62,16 @@ def main():
             print("Authenticated.")
         else:
             print("Login returned no cookie — proceeding without auth.")
-    except urllib.error.URLError as e:
-        print(f"ERROR: Could not connect to Dockhand — {e}")
-        sys.exit(1)
     except urllib.error.HTTPError as e:
-        if e.code == 400 and b"not enabled" in e.read():
+        body = e.read()
+        if e.code == 400 and b"not enabled" in body:
             print("Auth not enabled — proceeding without login.")
         else:
             print(f"ERROR: Login failed ({e.code}) — check credentials")
             sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"ERROR: Could not connect to Dockhand — {e}")
+        sys.exit(1)
 
     # Discover stacks
     stacks = find_stacks()
