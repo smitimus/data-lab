@@ -337,12 +337,24 @@ def ingest_table(
         table_exists = bool(raw_cols)
         log.info("[%s] raw table columns: %s", task_id, raw_cols)
 
+        # If table was created by meltano with surrogate PK columns, pk_col won't be
+        # in raw_cols — drop it so _ensure_table recreates it with the correct schema.
+        if table_exists and pk_col not in raw_cols:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}"')
+            conn.commit()
+            log.info("[%s] dropped %s.%s (PK column mismatch — meltano schema)", task_id, raw_schema, raw_table)
+            raw_cols = []
+            table_exists = False
+
         if strategy == "full":
             if table_exists:
                 with conn.cursor() as cur:
-                    cur.execute(f'TRUNCATE TABLE "{raw_schema}"."{raw_table}"')
+                    cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}"')
                 conn.commit()
-                log.info("[%s] truncated %s.%s", task_id, raw_schema, raw_table)
+                log.info("[%s] dropped %s.%s for full reload", task_id, raw_schema, raw_table)
+                raw_cols = []
+                table_exists = False
             rows = _fetch_all(api_path, {})
 
         else:  # incremental
