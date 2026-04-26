@@ -10,10 +10,12 @@ set -e
 # Resolve the repo root from this script's own location.
 STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Read the server IP from global.env — the same IP used in all service .env
-# files.  This avoids hard-coding the address and stays in sync with the rest
-# of the stack configuration.
-IP=$(grep '^IP=' "$STACKS/global.env" | cut -d= -f2 | sed 's/[[:space:]]*#.*//' | tr -d '[:space:]')
+# Read IP from dockhand .env (already substituted by install.sh's fill_env).
+# Fall back to detecting the LAN IP directly if the .env isn't present.
+IP=$(grep '^IP=' "$STACKS/dockhand/.env" 2>/dev/null | cut -d= -f2 | sed 's/[[:space:]]*#.*//' | tr -d '[:space:]')
+if [[ -z "$IP" || "$IP" == "YOUR_SERVER_IP" ]]; then
+    IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}') || IP="127.0.0.1"
+fi
 DOCKHAND_URL="http://$IP:3000"
 
 # -----------------------------------------------------------------------------
