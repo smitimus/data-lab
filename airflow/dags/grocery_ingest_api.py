@@ -383,15 +383,19 @@ def ingest_table(
 
         # Stream page-by-page into Postgres — never hold the full dataset in memory
         written = 0
+        page_num = 0
         for page in _fetch_pages(api_path, fetch_params):
             if not table_exists:
                 _ensure_table(conn, raw_schema, raw_table, pk_col, page[0])
                 raw_cols = _raw_columns(conn, raw_schema, raw_table)
                 table_exists = True
                 log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
-            written += _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
+            n = _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
+            written += n
+            page_num += 1
+            log.info("[%s] page %d: inserted %d rows (total so far: %d)", task_id, page_num, n, written)
 
-        log.info("[%s] wrote %d rows to %s.%s", task_id, written, raw_schema, raw_table)
+        log.info("[%s] done — %d total rows written to %s.%s", task_id, written, raw_schema, raw_table)
 
     finally:
         conn.close()
