@@ -47,7 +47,7 @@ EDW_CONN = {
     "password": "postgres",
 }
 PAGE_SIZE = 1000
-INCREMENTAL_FALLBACK_DAYS = 30   # lookback when raw table is empty
+INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty
 
 # ---------------------------------------------------------------------------
 # Table registry
@@ -99,20 +99,20 @@ TABLE_CONFIGS = [
 
     ("pos_loyalty_point_transactions", "/grocery/pos/loyalty-point-transactions",
      "raw_pos", "loyalty_point_transactions", "pt_id",
-     "full", None, None, None),
+     "incremental", "created_at", "start_dt", "end_dt"),
 
     ("pos_transactions", "/grocery/pos/transactions",
      "raw_pos", "transactions", "transaction_id",
-     "full", None, "start_dt", "end_dt"),
+     "incremental", "transaction_dt", "start_dt", "end_dt"),
 
     ("pos_transaction_items", "/grocery/pos/transaction-items",
      "raw_pos", "transaction_items", "item_id",
-     "full", None, None, None),
+     "incremental", "transaction_dt", "start_dt", "end_dt"),
 
     # ── Timeclock ────────────────────────────────────────────────────────────
     ("timeclock_events", "/grocery/timeclock/events",
      "raw_timeclock", "events", "event_id",
-     "full", None, "start_dt", "end_dt"),
+     "incremental", "event_dt", "start_dt", "end_dt"),
 
     # ── Ordering ─────────────────────────────────────────────────────────────
     ("ordering_store_orders", "/grocery/ordering/orders",
@@ -156,15 +156,15 @@ TABLE_CONFIGS = [
 
     ("inv_receipts", "/grocery/inventory/receipts",
      "raw_inv", "receipts", "receipt_id",
-     "full", None, None, None),
+     "incremental", "received_dt", "start_dt", "end_dt"),
 
     ("inv_receipt_items", "/grocery/inventory/receipt-items",
      "raw_inv", "receipt_items", "receipt_item_id",
-     "full", None, None, None),
+     "incremental", "received_dt", "start_dt", "end_dt"),
 
     ("inv_shrinkage_events", "/grocery/inventory/shrinkage-events",
      "raw_inv", "shrinkage_events", "shrinkage_id",
-     "full", None, None, None),
+     "incremental", "recorded_at", "start_dt", "end_dt"),
 
     # ── Pricing ──────────────────────────────────────────────────────────────
     ("pricing_weekly_ads", "/grocery/pricing/weekly-ads",
@@ -457,5 +457,5 @@ with DAG(
                         "api_start_param": api_start_param,
                         "api_end_param": api_end_param,
                     },
-                    execution_timeout=timedelta(minutes=20),
+                    execution_timeout=timedelta(minutes=60),
                 )
