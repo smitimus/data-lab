@@ -70,7 +70,7 @@ TABLE_CONFIGS = [
 
     ("hr_schedules",    "/grocery/hr/schedules",
      "raw_hr",  "schedules",  "schedule_id",
-     "incremental", "created_at", "start_date", "end_date"),
+     "full", None, None, None),
 
     # ── POS ─────────────────────────────────────────────────────────────────
     ("pos_departments", "/grocery/pos/departments",
@@ -99,20 +99,20 @@ TABLE_CONFIGS = [
 
     ("pos_loyalty_point_transactions", "/grocery/pos/loyalty-point-transactions",
      "raw_pos", "loyalty_point_transactions", "pt_id",
-     "incremental", "created_at", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     ("pos_transactions", "/grocery/pos/transactions",
      "raw_pos", "transactions", "transaction_id",
-     "incremental", "transaction_dt", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     ("pos_transaction_items", "/grocery/pos/transaction-items",
      "raw_pos", "transaction_items", "item_id",
-     "incremental", "transaction_dt", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     # ── Timeclock ────────────────────────────────────────────────────────────
     ("timeclock_events", "/grocery/timeclock/events",
      "raw_timeclock", "events", "event_id",
-     "incremental", "event_dt", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     # ── Ordering ─────────────────────────────────────────────────────────────
     ("ordering_store_orders", "/grocery/ordering/orders",
@@ -156,15 +156,15 @@ TABLE_CONFIGS = [
 
     ("inv_receipts", "/grocery/inventory/receipts",
      "raw_inv", "receipts", "receipt_id",
-     "incremental", "received_dt", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     ("inv_receipt_items", "/grocery/inventory/receipt-items",
      "raw_inv", "receipt_items", "receipt_item_id",
-     "incremental", "received_dt", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     ("inv_shrinkage_events", "/grocery/inventory/shrinkage-events",
      "raw_inv", "shrinkage_events", "shrinkage_id",
-     "incremental", "recorded_at", "start_dt", "end_dt"),
+     "full", None, None, None),
 
     # ── Pricing ──────────────────────────────────────────────────────────────
     ("pricing_weekly_ads", "/grocery/pricing/weekly-ads",
