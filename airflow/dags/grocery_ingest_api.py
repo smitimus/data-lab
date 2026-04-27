@@ -103,7 +103,7 @@ TABLE_CONFIGS = [
 
     ("pos_transactions", "/grocery/pos/transactions",
      "raw_pos", "transactions", "transaction_id",
-     "full", None, None, None),
+     "full", None, "start_dt", "end_dt"),
 
     ("pos_transaction_items", "/grocery/pos/transaction-items",
      "raw_pos", "transaction_items", "item_id",
@@ -112,7 +112,7 @@ TABLE_CONFIGS = [
     # ── Timeclock ────────────────────────────────────────────────────────────
     ("timeclock_events", "/grocery/timeclock/events",
      "raw_timeclock", "events", "event_id",
-     "full", None, None, None),
+     "full", None, "start_dt", "end_dt"),
 
     # ── Ordering ─────────────────────────────────────────────────────────────
     ("ordering_store_orders", "/grocery/ordering/orders",
@@ -351,12 +351,15 @@ def ingest_table(
         if strategy == "full":
             if table_exists:
                 with conn.cursor() as cur:
-                    cur.execute(f'DROP TABLE "{raw_schema}"."{raw_table}" CASCADE')
+                    cur.execute(f'TRUNCATE "{raw_schema}"."{raw_table}"')
                 conn.commit()
-                log.info("[%s] dropped %s.%s for full reload", task_id, raw_schema, raw_table)
-                raw_cols = []
-                table_exists = False
-            fetch_params: dict = {}
+                log.info("[%s] truncated %s.%s for full reload", task_id, raw_schema, raw_table)
+            # If the endpoint requires date params, pass a wide window covering all history
+            if api_start_param:
+                fetch_params: dict = {api_start_param: "2000-01-01", api_end_param: now_iso[:10]}
+                log.info("[%s] full reload with date window 2000-01-01 → %s", task_id, now_iso[:10])
+            else:
+                fetch_params = {}
 
         else:  # incremental
             if params_conf.get("start_dt") and params_conf.get("end_dt"):
