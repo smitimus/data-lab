@@ -1,52 +1,6 @@
 {
 	"folders": {},
 	"connections": {
-		"postgres-jdbc-19b3d4469b5-799ddb2bf6d6b68a": {
-			"provider": "postgresql",
-			"driver": "postgres-jdbc",
-			"name": "Gas Station — EDW",
-			"save-password": true,
-			"configuration": {
-				"host": "postgres",
-				"port": "5432",
-				"database": "gas_station",
-				"url": "jdbc:postgresql://postgres:5432/gas_station",
-				"configurationType": "MANUAL",
-				"type": "dev",
-				"closeIdleConnection": true,
-				"auth-model": "native",
-				"auth-properties": {
-					"user": "postgres",
-					"password": "postgres"
-				},
-				"bootstrap": {
-					"autocommit": true
-				}
-			}
-		},
-		"postgres-jdbc-verisim-source": {
-			"provider": "postgresql",
-			"driver": "postgres-jdbc",
-			"name": "Verisim — Gas Station Source",
-			"save-password": true,
-			"configuration": {
-				"host": "verisim-base-postgres",
-				"port": "5432",
-				"database": "gas_station",
-				"url": "jdbc:postgresql://verisim-base-postgres:5432/gas_station",
-				"configurationType": "MANUAL",
-				"type": "dev",
-				"closeIdleConnection": true,
-				"auth-model": "native",
-				"auth-properties": {
-					"user": "verisim",
-					"password": "verisim"
-				},
-				"bootstrap": {
-					"autocommit": true
-				}
-			}
-		},
 		"postgres-jdbc-grocery-edw": {
 			"provider": "postgresql",
 			"driver": "postgres-jdbc",

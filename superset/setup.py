@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Superset setup script — creates database connections, mart datasets, charts,
-and dashboards for Gas Station and Grocery industries via the REST API.
+and dashboards for Grocery via the REST API.
 
 Idempotent: checks for existing objects before creating.
 Run this after the superset service is healthy.
@@ -17,13 +17,6 @@ import requests
 BASE = "http://superset:8088"
 USERNAME = os.environ.get("SUPERSET_ADMIN_USERNAME", "admin")
 PASSWORD = os.environ.get("SUPERSET_ADMIN_PASSWORD", "admin")
-
-GAS_STATION_URI = (
-    f"postgresql+psycopg2://"
-    f"{os.environ.get('POSTGRES_USER', 'postgres')}:"
-    f"{os.environ.get('POSTGRES_PASSWORD', 'postgres')}"
-    f"@postgres:5432/gas_station"
-)
 
 GROCERY_URI = (
     f"postgresql+psycopg2://"
@@ -63,82 +56,6 @@ def wait_for_superset(retries=30, delay=5):
         time.sleep(delay)
     print("ERROR: Superset did not become ready in time.", file=sys.stderr)
     sys.exit(1)
-
-
-# ── Database ──────────────────────────────────────────────────────────────────
-
-def get_or_create_database(token):
-    r = requests.get(f"{BASE}/api/v1/database/", headers=h(token))
-    r.raise_for_status()
-    for db in r.json().get("result", []):
-        if db["database_name"] == "Gas Station":
-            print(f"  Database 'Gas Station' already exists (id={db['id']})")
-            return db["id"]
-
-    r = requests.post(f"{BASE}/api/v1/database/", headers=h(token), json={
-        "database_name": "Gas Station",
-        "sqlalchemy_uri": GAS_STATION_URI,
-        "expose_in_sqllab": True,
-        "allow_run_async": False,
-        "allow_ctas": True,
-        "allow_cvas": True,
-        "allow_dml": True,
-    })
-    r.raise_for_status()
-    db_id = r.json()["id"]
-    print(f"  Created database 'Gas Station' (id={db_id})")
-    return db_id
-
-
-# ── Datasets ──────────────────────────────────────────────────────────────────
-
-MART_TABLES = [
-    ("mart_daily_revenue",      "mart", "transaction_date"),
-    ("mart_fuel_summary",       "mart", "transaction_date"),
-    ("mart_product_performance","mart", "transaction_date"),
-    ("mart_location_performance","mart", None),
-]
-
-
-def get_or_create_datasets(token, db_id):
-    r = requests.get(
-        f"{BASE}/api/v1/dataset/",
-        headers=h(token),
-        params={"q": json.dumps({"page_size": 100})},
-    )
-    r.raise_for_status()
-    existing = {
-        (d["schema"], d["table_name"]): d["id"]
-        for d in r.json().get("result", [])
-    }
-
-    datasets = {}
-    for table_name, schema, dttm_col in MART_TABLES:
-        key = (schema, table_name)
-        if key in existing:
-            print(f"  Dataset {schema}.{table_name} already exists (id={existing[key]})")
-            datasets[table_name] = existing[key]
-        else:
-            payload = {
-                "database": db_id,
-                "schema": schema,
-                "table_name": table_name,
-            }
-            r = requests.post(f"{BASE}/api/v1/dataset/", headers=h(token), json=payload)
-            if r.status_code in (200, 201):
-                ds_id = r.json()["id"]
-                # Set main datetime column
-                if dttm_col:
-                    requests.put(
-                        f"{BASE}/api/v1/dataset/{ds_id}",
-                        headers=h(token),
-                        json={"main_dttm_col": dttm_col},
-                    )
-                datasets[table_name] = ds_id
-                print(f"  Created dataset {schema}.{table_name} (id={ds_id})")
-            else:
-                print(f"  WARNING: could not create {schema}.{table_name}: {r.text}")
-    return datasets
 
 
 # ── Charts ────────────────────────────────────────────────────────────────────
@@ -254,128 +171,6 @@ def simple_metric(column, aggregate="SUM"):
     }
 
 
-def get_or_create_charts(token, datasets):
-    r = requests.get(
-        f"{BASE}/api/v1/chart/",
-        headers=h(token),
-        params={"q": json.dumps({"page_size": 200})},
-    )
-    r.raise_for_status()
-    existing = {c["slice_name"]: c["id"] for c in r.json().get("result", [])}
-
-    daily_id    = datasets["mart_daily_revenue"]
-    fuel_id     = datasets["mart_fuel_summary"]
-    product_id  = datasets["mart_product_performance"]
-    location_id = datasets["mart_location_performance"]
-
-    chart_specs = [
-        # (name, viz_type, datasource_id, params)
-        (
-            "Total Revenue",
-            "big_number_total",
-            location_id,
-            params_big_number(location_id, "total_revenue", "SUM", "$,.0f", "All Time"),
-        ),
-        (
-            "Loyalty Attach Rate",
-            "big_number_total",
-            location_id,
-            # loyalty_attach_rate_pct is stored as e.g. 24.0 (already a %)
-            # Use ",.1f" so Superset doesn't multiply by 100 like ".1%" would
-            params_big_number(location_id, "loyalty_attach_rate_pct", "AVG", ",.1f", "% loyalty attach rate"),
-        ),
-        (
-            "Daily Revenue Trend",
-            "echarts_timeseries_line",
-            daily_id,
-            params_line(
-                daily_id,
-                "transaction_date",
-                [simple_metric("total_revenue")],
-                ["location_name"],
-                "$,.0f",
-            ),
-        ),
-        (
-            "POS vs Fuel Revenue",
-            "echarts_timeseries_bar",
-            daily_id,
-            params_timeseries_bar(
-                daily_id,
-                "transaction_date",
-                [simple_metric("pos_revenue"), simple_metric("fuel_revenue")],
-                [],
-                "$,.0f",
-            ),
-        ),
-        (
-            "Revenue by Location",
-            "dist_bar",
-            location_id,
-            params_dist_bar(
-                location_id,
-                [simple_metric("total_revenue")],
-                ["location_name"],
-                "$,.0f",
-            ),
-        ),
-        (
-            "Fuel Sales by Grade",
-            "pie",
-            fuel_id,
-            params_pie(
-                fuel_id,
-                ["grade_name"],
-                simple_metric("total_gallons"),
-                ",.1f",
-            ),
-        ),
-        (
-            "Top Product Categories",
-            "dist_bar",
-            product_id,
-            params_dist_bar(
-                product_id,
-                [simple_metric("gross_revenue")],
-                ["category"],
-                "$,.0f",
-            ),
-        ),
-        (
-            "Avg Daily Revenue by Location",
-            "dist_bar",
-            location_id,
-            params_dist_bar(
-                location_id,
-                [simple_metric("avg_daily_revenue", "AVG")],
-                ["location_name"],
-                "$,.0f",
-            ),
-        ),
-    ]
-
-    charts = {}
-    for name, viz_type, ds_id, chart_params in chart_specs:
-        if name in existing:
-            print(f"  Chart '{name}' already exists (id={existing[name]})")
-            charts[name] = existing[name]
-        else:
-            r = requests.post(f"{BASE}/api/v1/chart/", headers=h(token), json={
-                "slice_name": name,
-                "viz_type": viz_type,
-                "datasource_id": ds_id,
-                "datasource_type": "table",
-                "params": chart_params,
-            })
-            if r.status_code in (200, 201):
-                cid = r.json()["id"]
-                charts[name] = cid
-                print(f"  Created chart '{name}' (id={cid})")
-            else:
-                print(f"  WARNING: could not create chart '{name}': {r.text}")
-    return charts
-
-
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 def build_position(layout):
@@ -419,56 +214,6 @@ def build_position(layout):
                 },
             }
     return pos
-
-
-def get_or_create_dashboard(token, charts):
-    TITLE = "Gas Station Overview"
-
-    r = requests.get(
-        f"{BASE}/api/v1/dashboard/",
-        headers=h(token),
-        params={"q": json.dumps({"page_size": 100})},
-    )
-    r.raise_for_status()
-    for d in r.json().get("result", []):
-        if d["dashboard_title"] == TITLE:
-            print(f"  Dashboard '{TITLE}' already exists (id={d['id']})")
-            return d["id"]   # caller will re-link charts
-
-    # Build layout: 3 rows
-    # Row 1: Total Revenue (3) | Loyalty Rate (3) | Revenue by Location (6)
-    # Row 2: Daily Revenue Trend (8) | Fuel by Grade (4)
-    # Row 3: POS vs Fuel (6) | Top Categories (6)
-    layout = [
-        [
-            (charts.get("Total Revenue", 0),       "Total Revenue",       3, 60),
-            (charts.get("Loyalty Attach Rate", 0), "Loyalty Attach Rate", 3, 60),
-            (charts.get("Revenue by Location", 0), "Revenue by Location", 6, 60),
-        ],
-        [
-            (charts.get("Daily Revenue Trend", 0), "Daily Revenue Trend", 8, 80),
-            (charts.get("Fuel Sales by Grade", 0), "Fuel Sales by Grade", 4, 80),
-        ],
-        [
-            (charts.get("POS vs Fuel Revenue", 0),         "POS vs Fuel Revenue",         6, 80),
-            (charts.get("Top Product Categories", 0),      "Top Product Categories",      6, 80),
-        ],
-    ]
-
-    position_json = json.dumps(build_position(layout))
-
-    r = requests.post(f"{BASE}/api/v1/dashboard/", headers=h(token), json={
-        "dashboard_title": TITLE,
-        "position_json": position_json,
-        "published": True,
-    })
-    if r.status_code not in (200, 201):
-        print(f"  WARNING: could not create dashboard: {r.text}")
-        return None
-
-    dash_id = r.json()["id"]
-    print(f"  Created dashboard '{TITLE}' (id={dash_id})")
-    return dash_id
 
 
 def link_charts_to_dashboard(dash_id, chart_ids):
@@ -753,25 +498,6 @@ def main():
 
     print("Logging in...")
     token = login()
-
-    # --- Gas Station ---
-    print("\n=== Gas Station ===")
-    print("Setting up database connection...")
-    db_id = get_or_create_database(token)
-
-    print("Setting up datasets...")
-    datasets = get_or_create_datasets(token, db_id)
-
-    if datasets:
-        print("Setting up charts...")
-        charts = get_or_create_charts(token, datasets)
-
-        print("Setting up dashboard...")
-        dash_id = get_or_create_dashboard(token, charts)
-        if dash_id:
-            link_charts_to_dashboard(dash_id, list(charts.values()))
-    else:
-        print("WARNING: no gas station datasets created, skipping charts/dashboard.")
 
     # --- Grocery ---
     print("\n=== Grocery ===")
