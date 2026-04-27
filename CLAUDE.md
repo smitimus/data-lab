@@ -1,10 +1,10 @@
-# Claude Context — Data Lab (`stacks/`)
+# Claude Context — Data Lab (`data-lab/`)
 
 ## Environment Naming
 
 | Name | Machine | Path |
 |------|---------|------|
-| **dev** | This machine | `/opt/stacks` (repo root) |
+| **dev** | This machine | `/opt/data-lab` (repo root) |
 | **test** | testvm (192.168.1.6) | `/opt/data-lab` (standard install path) |
 
 Full analytics engineering stack pre-wired to Verisim Grocery as the data source. The pipeline: verisim-grocery (source) → Airflow API ingest → postgres/grocery → dbt → Superset + dbt Docs.
