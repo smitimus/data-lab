@@ -153,6 +153,14 @@ curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
 4. Remove from: `start.sh`, `stop.sh`, `init.sh` (wipe-check list + mkdir + seed section), `setup.sh`
 5. Update CLAUDE.md active stacks list
 
+## Fresh Install Pipeline Notes
+
+- DAGs start **paused** — unpause before triggering:
+  `curl -X PATCH http://localhost:8080/api/v2/dags/<dag_id> -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"is_paused": false}'`
+- First pipeline run on a brand-new install may fail on `stg_pos_loyalty_point_transactions` (verisim still bootstrapping its DB) — re-run passes cleanly
+- `dbt-docs` runs `dbt docs generate` on startup as the same UID as Airflow (`AIRFLOW_UID`); don't change `user:` in `dbt-docs/compose.yaml` or dbt will get PermissionError on `logs/dbt.log`
+- Ingest uses `DROP TABLE ... CASCADE` for full-refresh tables — required because dbt staging views depend on raw tables; plain `DROP TABLE` raises `DependentObjectsStillExist`
+
 ## Superset First-Run Notes
 
 - `superset init` (role/permission sync) takes **20–40 minutes** on first run — this is normal
