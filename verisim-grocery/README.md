@@ -12,6 +12,8 @@ Standalone grocery store mock data generator. Runs the full verisim-grocery Dock
 
 On first start, the generator auto-backfills 30 days of transaction history, then switches to real-time simulation (15-minute ticks). The Airflow pipeline reads from this database every 15 minutes.
 
+**Streamlit UI tabs:** Dashboard (live metrics, auto-refresh) · Generator Control (start/stop/backfill) · Scenarios · Promotions (coupons, weekly ads) · Distributions · Table Explorer · Data Dictionary
+
 ## Key Config Files
 - `verisim-grocery/compose.yaml` — pulls `smiti/verisim-grocery:latest`, exposes ports 5499, 8010, 8501
 
