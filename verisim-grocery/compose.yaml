@@ -22,6 +22,12 @@ services:
       POSTGRES_PASSWORD: ${VERISIM_POSTGRES_PASSWORD:-verisim}
       POSTGRES_DB: ${VERISIM_GROCERY_DB:-grocery}
       TZ: ${TZ}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${VERISIM_POSTGRES_USER:-verisim}", "-d", "${VERISIM_GROCERY_DB:-grocery}"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
       - ${CONF}/verisim-grocery:/var/lib/postgresql/data
     restart: unless-stopped
@@ -31,4 +37,3 @@ services:
       - homepage.icon=docker.png
       - homepage.href=http://${IP}:${VERISIM_UI_PORT:-8501}/
       - "homepage.description=Grocery data generator — UI: no auth | API: no auth | DB: verisim/verisim"
-

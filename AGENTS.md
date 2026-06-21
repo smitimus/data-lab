@@ -101,6 +101,42 @@ Verisim source DB (separate container):
 docker exec verisim-grocery psql -U verisim -d grocery -c "SELECT ..."
 ```
 
+## Source Tables Contract (verisim → dbt)
+
+The dbt staging layer expects these 27 source tables from Verisim's generator:
+
+| Source Schema | Table | dbt Staging Model | Notes |
+|--------------|-------|-------------------|-------|
+| hr | locations | stg_locations | Store/warehouse locations |
+| hr | employees | stg_employees | Employee roster |
+| hr | schedules | stg_hr_schedules | Shift schedules |
+| pos | departments | stg_pos_departments | Product departments |
+| pos | products | stg_pos_products | SKU catalog |
+| pos | price_history | stg_pos_price_history | Price changes |
+| pos | coupons | stg_pos_coupons | Active coupons |
+| pos | combo_deals | stg_pos_combo_deals | Multi-product deals |
+| pos | loyalty_members | stg_pos_loyalty_members | Loyalty program |
+| pos | loyalty_point_transactions | stg_pos_loyalty_point_transactions | Points ledger |
+| pos | transactions | stg_pos_transactions | POS header |
+| pos | transaction_items | stg_pos_transaction_items | Line items |
+| ordering | store_orders | stg_ordering_store_orders | Store replenishment orders |
+| ordering | store_order_items | stg_ordering_store_order_items | Order line items |
+| fulfillment | orders | stg_fulfillment_orders | Warehouse fulfillment |
+| fulfillment | order_items | stg_fulfillment_items | Fulfillment line items |
+| transport | trucks | stg_transport_trucks | Delivery truck fleet |
+| transport | loads | stg_transport_loads | Truck dispatch records |
+| transport | load_items | stg_transport_load_items | Load contents |
+| inv | stock_levels | stg_inv_stock_levels | Inventory counts |
+| inv | shrinkage_events | stg_inv_shrinkage_events | Loss/shrinkage |
+| inv | receipts | stg_inv_receipts | Warehouse receipts |
+| inv | receipt_items | stg_inv_receipt_items | Receipt line items |
+| inv | products | stg_inv_products | Extended product data |
+| pricing | weekly_ads | stg_pricing_weekly_ads | Ad circulars |
+| pricing | ad_items | stg_pricing_ad_items | Ad line items |
+| timeclock | events | stg_timeclock_events | Clock in/out, breaks |
+
+**If a Verisim schema changes** (new column, renamed table), update the matching staging model in `/opt/data-lab/airflow/dbt/grocery/models/staging/` and the source definitions in `sources.yml`.
+
 ## Grocery Data Model — Non-Obvious Business Logic
 
 - **Transaction total**: `total = subtotal + tax - coupon_savings - deal_savings`
@@ -122,7 +158,7 @@ TOKEN=$(curl -s -X POST http://localhost:8088/api/v1/security/login \
 
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8088/api/v1/dashboard/export/?q=!(1,2)" \
-  -o stacks/superset/dashboards/export.zip
+  -o superset/dashboards/export.zip
 ```
 
 - **Import via API** (used in install.sh):
@@ -133,6 +169,78 @@ curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
   -F "formData=@stacks/superset/dashboards/verisim_grocery_dashboards.zip" \
   -F 'passwords={"databases/Gas_Station.yaml":"postgres","databases/Grocery.yaml":"postgres"}'
 ```
+
+## Pipeline Data Flow
+
+```
+verisim-grocery source DB (port 5499)
+  │
+  │ Airflow: grocery_ingest_api DAG
+  │ (27 source tables → raw_* schemas via API)
+  ▼
+raw_hr, raw_pos, raw_timeclock, raw_ordering,
+raw_fulfillment, raw_transport, raw_inv, raw_pricing
+  │
+  │ dbt run --select staging
+  │ (27 SQL views, one per source table)
+  ▼
+staging (stg_*) — cleaned, typed, renamed columns
+  │
+  │ dbt run --select marts
+  │ (14 materialized tables, business-domain aggregated)
+  ▼
+mart (mart_*) — revenue, labor, inventory, loyalty, products, etc.
+  │
+  ├── Superset dashboards (BI)
+  ├── CloudBeaver (ad-hoc queries)
+  └── dbt Docs (catalog + lineage + tests)
+```
+
+### Staging Layer (27 models)
+- Raw → staging is **light** cleanup: column rename, type cast, COALESCE nulls
+- Materialized as views (no storage cost)
+- One view per source table (1:1 mapping)
+
+### Mart Layer (14 tables)
+- Materialized as tables (refreshed on each run)
+- Domain-based: daily_revenue, department_performance, loyalty_cohort, etc.
+- 7 custom data quality tests (freshness, uniqueness, referential integrity)
+
+## Service Health Checks
+
+```bash
+# Postgres EDW
+docker exec postgres pg_isready -U postgres -d grocery
+
+# Verisim source DB
+docker exec verisim-grocery pg_isready -U verisim -d grocery
+
+# Airflow webserver + scheduler
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health
+
+# Superset
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/api/v1/health
+
+# dbt Docs
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8082/index.html
+
+# CloudBeaver
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8978
+
+# All containers healthy?
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v Exited
+```
+
+## Troubleshooting Guide
+
+| Problem | Check First | Fix |
+|---------|------------|-----|
+| Pipeline DAG fails on ingest | Is verisim-grocery running? | `docker ps | grep verisim-grocery` |
+| Pipeline DAG fails on dbt | Is postgres EDW accessible? | `docker exec postgres psql -U postgres -d grocery -c "SELECT 1"` |
+| Superset shows no data | Has the pipeline run successfully? | Check mart tables: `docker exec postgres psql -U postgres -d grocery -c "SELECT COUNT(*) FROM mart.mart_daily_revenue"` |
+| Container won't start | Port conflict? | `ss -tlnp | grep <port>` |
+| dbt test fails | Schema mismatch? | Re-run ingest first, then dbt |
+| superset-init taking forever | Normal on first run | Wait 20-40 min; check `/tmp/superset-import.log` |
 
 ## Pipeline Gotchas
 
