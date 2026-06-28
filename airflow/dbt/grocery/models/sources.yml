@@ -197,7 +197,7 @@ sources:
             tests: [not_null]
       - name: shrinkage_events
         columns:
-          - name: event_id
+          - name: shrinkage_id
             tests: [unique, not_null]
           - name: product_id
             tests: [not_null]
