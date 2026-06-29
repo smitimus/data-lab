@@ -7,6 +7,10 @@ sources:
   - name: raw_hr
     schema: raw_hr
     description: "HR source tables loaded via API DAG (grocery_ingest_api) → raw_hr schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: locations
         columns:
@@ -38,6 +42,10 @@ sources:
   - name: raw_pos
     schema: raw_pos
     description: "POS source tables loaded via API DAG (grocery_ingest_api) → raw_pos schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: departments
         columns:
@@ -90,6 +98,10 @@ sources:
   - name: raw_timeclock
     schema: raw_timeclock
     description: "Timeclock source tables loaded via API DAG (grocery_ingest_api) → raw_timeclock schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: events
         columns:
@@ -104,6 +116,10 @@ sources:
   - name: raw_ordering
     schema: raw_ordering
     description: "Store ordering source tables loaded via API DAG (grocery_ingest_api) → raw_ordering schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: store_orders
         columns:
@@ -124,6 +140,10 @@ sources:
   - name: raw_fulfillment
     schema: raw_fulfillment
     description: "Fulfillment source tables loaded via API DAG (grocery_ingest_api) → raw_fulfillment schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: orders
         columns:
@@ -144,6 +164,10 @@ sources:
   - name: raw_transport
     schema: raw_transport
     description: "Transport source tables loaded via API DAG (grocery_ingest_api) → raw_transport schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: trucks
         columns:
@@ -168,6 +192,10 @@ sources:
   - name: raw_inv
     schema: raw_inv
     description: "Inventory source tables loaded via API DAG (grocery_ingest_api) → raw_inv schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: products
         columns:
@@ -210,6 +238,10 @@ sources:
   - name: raw_pricing
     schema: raw_pricing
     description: "Pricing/promotions source tables loaded via API DAG (grocery_ingest_api) → raw_pricing schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
     tables:
       - name: weekly_ads
         columns:

@@ -121,5 +121,12 @@ with DAG(
         execution_timeout=timedelta(minutes=10),
     )
 
+    t_freshness = BashOperator(
+        task_id="check_source_freshness",
+        bash_command=DBT.format(cmd="source freshness"),
+        execution_timeout=timedelta(minutes=5),
+    )
+
     staging_group >> [marts_group, t_test_staging]
     marts_group >> t_test_marts
+    [t_test_staging, t_test_marts] >> t_freshness
