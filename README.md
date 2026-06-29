@@ -2,7 +2,7 @@
 
 A full analytics engineering stack with realistic grocery store mock data, pre-wired and ready to explore. One command on a fresh Debian machine gives you a complete data pipeline.
 
-**Stack:** Verisim Grocery (mock data) → Meltano (EL) → PostgreSQL EDW → dbt (transform) → Superset (BI) + dbt Docs (catalog) + CloudBeaver (DB IDE) + Airflow (orchestration)
+**Stack:** Verisim Grocery (mock data) → API DAG (Airflow) → PostgreSQL EDW → dbt (transform) → Superset (BI) + dbt Docs (catalog) + CloudBeaver (DB IDE) + Airflow (orchestration)
 
 ---
 
@@ -19,9 +19,9 @@ Requires: Debian or Ubuntu, internet access, ~10 GB disk space. Installs Docker 
 ## What You Get
 
 ```
-Verisim Grocery          →  Meltano EL            →  PostgreSQL EDW
-(mock data generator)       (tap-postgres →            (raw_* schemas)
-30-day auto-backfill        target-postgres)
+Verisim Grocery          →  API DAG (Airflow)      →  PostgreSQL EDW
+(mock data generator)       (HTTP API paginated       (raw_* schemas)
+30-day auto-backfill        ingestion)
                                     ↓
                              dbt (Airflow)
                         (staging → mart models)
@@ -79,7 +79,7 @@ cd /opt/data-lab
 nano global.env
 
 # Generate .env files from templates
-for d in airflow postgres meltano superset cloudbeaver homepage dbt-docs dockhand verisim-grocery; do
+for d in airflow postgres superset cloudbeaver homepage dbt-docs dockhand verisim-grocery; do
   cp $d/.env.example $d/.env
 done
 
@@ -114,7 +114,7 @@ bash start.sh
 ## First-Time Setup After Install
 
 1. **Trigger the Airflow DAG:** Airflow → DAGs → `grocery_pipeline` → ▶ Trigger
-   - Runs Meltano EL + dbt staging + dbt marts + dbt tests (~2–5 min)
+   - Run the pipeline: trigger `grocery_ingest_api` → `grocery_dbt` (staging → marts → tests)
 2. **Check Superset dashboards** — data appears after the first successful DAG run
 3. **Adopt stacks in Dockhand:** `bash setup.sh` (or follow prompts)
 4. **dbt Docs catalog** — browse model lineage and columns at `http://SERVER_IP:8082`
@@ -129,7 +129,7 @@ Each service has its own README with access details, config files, and usage not
 |---------|--------|
 | Airflow | [airflow/README.md](airflow/README.md) |
 | PostgreSQL | [postgres/README.md](postgres/README.md) |
-| Meltano | [meltano/README.md](meltano/README.md) |
+| Ingestion (API DAG) | [airflow/dags/grocery_ingest_api.py](airflow/dags/grocery_ingest_api.py) |
 | Superset | [superset/README.md](superset/README.md) |
 | CloudBeaver | [cloudbeaver/README.md](cloudbeaver/README.md) |
 | Homepage | [homepage/README.md](homepage/README.md) |
@@ -141,7 +141,7 @@ Each service has its own README with access details, config files, and usage not
 
 ## Adding Your Own Data Sources
 
-**Add a Meltano tap:** Edit `conf/meltano/meltano.yml`, add the tap config, restart the meltano container.
+**Add a new ingestion source:** Add a new DAG in `airflow/dags/` following the `grocery_ingest_api` pattern.
 
 **Add a dbt project:** Create a new project in `airflow/dbt/`, add a profiles entry in `airflow/dbt/profiles.yml`, add a DAG in `airflow/dags/`.
 

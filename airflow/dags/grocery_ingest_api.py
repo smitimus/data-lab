@@ -2,7 +2,7 @@
 Grocery Ingest — API Method DAG
 ================================
 Ingests grocery source data from the Verisim HTTP API into the EDW raw schemas.
-An alternative to Meltano (tap-postgres); both write to the same raw_* tables.
+This is the sole ingestion path into the EDW (Meltano has been removed from the stack).
 
 Strategy per table:
   - Full refresh: TRUNCATE raw table then reload all rows via paginated API calls.

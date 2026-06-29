@@ -9,9 +9,10 @@
 | Password | postgres                           |
 
 ## What It Does
-Shared PostgreSQL 16 database server. Hosts two databases:
-- **`edw`** — Enterprise Data Warehouse. Contains `raw_*` schemas (loaded by Meltano), `staging` schema (dbt staging models), and `mart` schema (dbt mart models).
-- **Airflow metadata** — Airflow scheduler and webserver state.
+Shared PostgreSQL 16 database server. Hosts three databases:
+- **`grocery`** — Enterprise Data Warehouse. Contains `raw_*` schemas (loaded by the `grocery_ingest_api` DAG), `staging` (dbt staging models), and `mart` (dbt mart models).
+- **`airflow`** — Airflow scheduler and webserver metadata.
+- **`superset`** — Superset metadata.
 
 The verisim-grocery container has its **own separate postgres** on port 5499 — this shared postgres on port 5432 is the EDW only.
 
@@ -22,7 +23,7 @@ The verisim-grocery container has its **own separate postgres** on port 5499 —
 ## Usage Notes
 - Query the EDW from the host:
   ```bash
-  docker exec postgres psql -U postgres -d edw -c "SELECT * FROM mart.mart_daily_revenue LIMIT 5;"
+  docker exec postgres psql -U postgres -d grocery -c "SELECT * FROM mart.mart_daily_revenue LIMIT 5;"
   ```
 - No `psql` installed on the host — always use `docker exec postgres psql ...`
 - The `pg` wrapper script at `~/bin/pg` is a convenience alias for interactive sessions

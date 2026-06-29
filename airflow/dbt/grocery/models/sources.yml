@@ -6,7 +6,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_hr
     schema: raw_hr
-    description: "HR source tables loaded by Meltano → raw_hr schema"
+    description: "HR source tables loaded via API DAG (grocery_ingest_api) → raw_hr schema"
     tables:
       - name: locations
         columns:
@@ -37,7 +37,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_pos
     schema: raw_pos
-    description: "POS source tables loaded by Meltano → raw_pos schema"
+    description: "POS source tables loaded via API DAG (grocery_ingest_api) → raw_pos schema"
     tables:
       - name: departments
         columns:
@@ -89,7 +89,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_timeclock
     schema: raw_timeclock
-    description: "Timeclock source tables loaded by Meltano → raw_timeclock schema"
+    description: "Timeclock source tables loaded via API DAG (grocery_ingest_api) → raw_timeclock schema"
     tables:
       - name: events
         columns:
@@ -103,7 +103,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_ordering
     schema: raw_ordering
-    description: "Store ordering source tables loaded by Meltano → raw_ordering schema"
+    description: "Store ordering source tables loaded via API DAG (grocery_ingest_api) → raw_ordering schema"
     tables:
       - name: store_orders
         columns:
@@ -123,7 +123,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_fulfillment
     schema: raw_fulfillment
-    description: "Fulfillment source tables loaded by Meltano → raw_fulfillment schema"
+    description: "Fulfillment source tables loaded via API DAG (grocery_ingest_api) → raw_fulfillment schema"
     tables:
       - name: orders
         columns:
@@ -143,7 +143,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_transport
     schema: raw_transport
-    description: "Transport source tables loaded by Meltano → raw_transport schema"
+    description: "Transport source tables loaded via API DAG (grocery_ingest_api) → raw_transport schema"
     tables:
       - name: trucks
         columns:
@@ -167,7 +167,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_inv
     schema: raw_inv
-    description: "Inventory source tables loaded by Meltano → raw_inv schema"
+    description: "Inventory source tables loaded via API DAG (grocery_ingest_api) → raw_inv schema"
     tables:
       - name: products
         columns:
@@ -209,7 +209,7 @@ sources:
   # ---------------------------------------------------------------------------
   - name: raw_pricing
     schema: raw_pricing
-    description: "Pricing/promotions source tables loaded by Meltano → raw_pricing schema"
+    description: "Pricing/promotions source tables loaded via API DAG (grocery_ingest_api) → raw_pricing schema"
     tables:
       - name: weekly_ads
         columns:

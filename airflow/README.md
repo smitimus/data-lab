@@ -9,12 +9,13 @@
 | Port     | 8080                               |
 
 ## What It Does
-Orchestrates the data pipeline: Meltano EL (extract verisim-grocery tables → load to EDW) followed by dbt transformations (staging → marts) and dbt tests. The `grocery_pipeline` DAG runs on a 15-minute schedule matching the verisim generator tick rate.
+Orchestrates the data pipeline in two phases: (1) `grocery_ingest_api` — paginated HTTP ingestion from the Verisim API into EDW raw_* schemas, (2) `grocery_dbt` — dbt staging → marts → tests.
 
 Built from a custom Dockerfile (`airflow/Dockerfile`) on top of `apache/airflow:3.1.3` with dbt-core, dbt-postgres, and the Docker CLI added.
 
 ## Key Config Files
-- `airflow/dags/grocery_pipeline.py` — main pipeline DAG (Meltano EL → dbt staging → dbt marts → dbt test)
+- `airflow/dags/grocery_ingest_api.py` — API ingestion DAG (HTTP → raw_* schemas)
+- `airflow/dags/grocery_dbt.py` — dbt transformation DAG (raw → staging → marts → tests)
 - `airflow/dbt/grocery/` — dbt project (27 staging models, 14 mart models, 7 custom tests)
 - `airflow/dbt/profiles.yml` — dbt connection profiles (grocery + gasstation)
 
