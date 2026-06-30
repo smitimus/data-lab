@@ -2,3 +2,6 @@ gasstation/target/
 gasstation/logs/
 gasstation/dbt_packages/
 gasstation/.user.yml
+grocery/target/
+grocery/logs/
+grocery/dbt_packages/

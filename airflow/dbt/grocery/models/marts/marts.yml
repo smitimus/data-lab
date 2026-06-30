@@ -17,6 +17,13 @@ models:
         tests: [not_null]
       - name: total_revenue
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 7
+          max_value: 730
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: total_revenue
+          min_value: 0
 
   # ── mart_department_performance ───────────────────────────────────────────
   # Grain: one row per (transaction_date, location_id, department_id)
@@ -37,6 +44,10 @@ models:
         tests: [not_null]
       - name: units_sold
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
+          max_value: 10000
 
   # ── mart_department_labor ─────────────────────────────────────────────────
   # Grain: one row per (report_date, location_id, department)
@@ -53,6 +64,18 @@ models:
         tests: [not_null]
       - name: scheduled_hours
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: scheduled_hours
+          min_value: 0
+          config:
+            severity: warn
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: hours_utilization_pct
+          min_value: 0
+          max_value: 300
+          config:
+            severity: warn
 
   # ── mart_department_shrinkage ─────────────────────────────────────────────
   # Grain: one row per (report_date, location_id, department_id)
@@ -115,6 +138,13 @@ models:
         tests: [not_null]
       - name: quantity_available
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 10000
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: quantity_on_hand
+          min_value: 0
 
   # ── mart_labor_efficiency ─────────────────────────────────────────────────
   # Grain: one row per (scheduled_date, location_id, department)
@@ -156,7 +186,10 @@ models:
       - name: points_balance
         tests: [not_null]
       - name: total_spend
-        # nullable for members who have signed up but not yet made a purchase
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100000
 
   # ── mart_product_performance ──────────────────────────────────────────────
   # Grain: one row per (transaction_date, location_id, product_id)
@@ -175,6 +208,16 @@ models:
         tests: [not_null]
       - name: net_revenue
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 100000
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: gross_revenue
+          min_value: 0
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: units_sold
+          min_value: 0
 
   # ── mart_promotion_effectiveness ──────────────────────────────────────────
   # Grain: one row per (ad_week_start, product_id, is_ad_item)
@@ -207,6 +250,13 @@ models:
         tests: [not_null]
       - name: total_value_lost
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
+          max_value: 50000
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: shrinkage_type
+          value_set: ['damaged', 'expired', 'spoilage', 'theft']
 
   # ── mart_supply_chain_summary ─────────────────────────────────────────────
   # Grain: one row per order_id
@@ -221,6 +271,10 @@ models:
         tests: [not_null]
       - name: order_status
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
+          max_value: 10000
 
   # ── mart_inventory_turnover ───────────────────────────────────────────────
   # Grain: one row per (product_id, location_id) — store only
@@ -244,6 +298,10 @@ models:
           - not_null
           - accepted_values:
               values: ['OUT_OF_STOCK', 'DEAD_STOCK', 'OVERSTOCKED', 'REORDER_NEEDED', 'NO_RECEIPT_HISTORY', 'HEALTHY']
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 10000
 
   # ── mart_hourly_sales_pattern ─────────────────────────────────────────────
   # Grain: one row per (hour_of_day, day_of_week, location_id)
@@ -264,6 +322,10 @@ models:
         tests: [not_null]
       - name: revenue_rank
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 24
+          max_value: 10000
 
   # ── mart_delivery_performance ─────────────────────────────────────────────
   # Grain: one row per (report_week_start, warehouse_location_id)
@@ -280,6 +342,10 @@ models:
         tests: [not_null]
       - name: delivered_count
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 52
 
   # ── mart_store_weekly_summary ─────────────────────────────────────────────
   # Grain: one row per (report_week_start, location_id)
@@ -300,3 +366,7 @@ models:
         tests: [not_null]
       - name: out_of_stock_count
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 500

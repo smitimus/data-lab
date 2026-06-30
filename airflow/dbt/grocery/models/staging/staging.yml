@@ -12,6 +12,13 @@ models:
         tests: [not_null]
       - name: location_type
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 20
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: location_type
+          value_set: ['store', 'warehouse']
 
   - name: stg_employees
     columns:
@@ -23,6 +30,16 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
+          max_value: 500
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: department
+          value_set: ['bakery', 'deli', 'management', 'meat', 'produce', 'store', 'transport', 'warehouse']
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: status
+          value_set: ['active', 'terminated']
 
   - name: stg_hr_schedules
     columns:
@@ -42,6 +59,15 @@ models:
               field: location_id
       - name: scheduled_date
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: status
+          value_set: ['called_out', 'completed', 'no_show', 'scheduled']
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          column_A: shift_end
+          column_B: shift_start
+          config:
+            severity: warn
 
   # ── POS ───────────────────────────────────────────────────────────────────
 
@@ -68,6 +94,10 @@ models:
         tests: [not_null]
       - name: unit_cost
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 5000
 
   - name: stg_pos_transactions
     columns:
@@ -89,6 +119,22 @@ models:
               field: employee_id
       - name: total
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 50000
+          max_value: 10000000
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: payment_method
+          value_set: ['cash', 'credit', 'debit', 'ebt', 'loyalty_points', 'mobile_pay']
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: scenario_tag
+          value_set: ['normal', 'rush_hour']
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          column_A: total
+          column_B: subtotal
+          or_equal: true
+          config:
+            severity: warn
 
   - name: stg_pos_transaction_items
     columns:
@@ -112,6 +158,10 @@ models:
         tests: [not_null]
       - name: line_total
         tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 500000
+          max_value: 50000000
 
   - name: stg_pos_loyalty_members
     columns:
@@ -249,6 +299,11 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+    data_tests:
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          column_A: completed_at
+          column_B: started_at
+          or_equal: true
 
   - name: stg_fulfillment_items
     columns:
@@ -266,6 +321,10 @@ models:
           - relationships:
               to: ref('stg_pos_products')
               field: product_id
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: pick_status
+          value_set: ['picked', 'short']
 
   # ── Transport ─────────────────────────────────────────────────────────────
 
@@ -275,6 +334,10 @@ models:
         tests: [unique, not_null]
       - name: license_plate
         tests: [unique, not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 50
 
   - name: stg_transport_loads
     columns:
@@ -402,6 +465,10 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: shrinkage_type
+          value_set: ['damaged', 'expired', 'spoilage', 'theft']
 
   # ── Pricing ───────────────────────────────────────────────────────────────
 
