@@ -47,6 +47,7 @@ EDW_CONN = {
     "password": "postgres",
 }
 PAGE_SIZE = 1000
+SMALL_TABLE_THRESHOLD = 100_000  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
 INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty
 
 # ---------------------------------------------------------------------------
@@ -228,17 +229,33 @@ def _get_watermark(conn, schema: str, table: str, col: str) -> str:
     return result.isoformat() if isinstance(result, datetime) else str(result)
 
 
-def _parse_dt(s: str) -> datetime:
-    """Parse ISO datetime string, localizing naive datetimes to UTC."""
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
+    """Generator: yield one page of rows at a time, never accumulating all rows in memory.
 
-
-def _fetch_pages(path: str, params: dict):
-    """Generator: yield one page of rows at a time, never accumulating all rows in memory."""
+    When max_page_fetch is set (e.g. SMALL_TABLE_THRESHOLD), issues a single request
+    with that as the limit and no pagination. This avoids the offset-pagination race
+    where the Verisim generator inserting new rows mid-ingestion shifts pages and
+    causes silent row skips. Incremental tables continue paginating with PAGE_SIZE.
+    """
     url = f"{API_BASE}{path}"
+    if max_page_fetch:
+        # Single request — no pagination, no race
+        p = {**params, "limit": max_page_fetch, "offset": 0}
+        resp = requests.get(url, params=p, timeout=120)
+        if resp.status_code >= 500:
+            log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
+            return
+        resp.raise_for_status()
+        data = resp.json()
+        page = data if isinstance(data, list) else data.get("data", [])
+        if not page:
+            return
+        log.info("  %s: fetched %d rows (single request, limit=%d)", path, len(page), max_page_fetch)
+        if len(page) == max_page_fetch:
+            log.warning("  %s: response hit the threshold limit (%d) — may be truncated; raise SMALL_TABLE_THRESHOLD if needed", path, max_page_fetch)
+        yield page
+        return
+
     offset = 0
     while True:
         p = {**params, "limit": PAGE_SIZE, "offset": offset}
@@ -362,6 +379,12 @@ def ingest_table(
                     cur.execute(f'TRUNCATE "{raw_schema}"."{raw_table}"')
                 conn.commit()
                 log.info("[%s] truncated %s.%s for full reload", task_id, raw_schema, raw_table)
+            # If the endpoint requires date params, pass a wide window covering all history
+            if api_start_param:
+                fetch_params: dict = {api_start_param: "2000-01-01", api_end_param: now_iso[:10]}
+                log.info("[%s] full reload with date window 2000-01-01 → %s", task_id, now_iso[:10])
+            else:
+                fetch_params = {}
 
         else:  # incremental
             if params_conf.get("start_dt") and params_conf.get("end_dt"):
@@ -378,51 +401,31 @@ def ingest_table(
                 end = now_iso
                 log.info("[%s] no table yet — fallback window: %s → %s", task_id, start, end)
 
-        # Build time windows for stable pagination.
-        # Incremental tables use 1-hour time buckets to prevent offset drift when
-        # the generator adds new data during ingestion (past-hour buckets are stable).
-        # Full tables use a single wide window (they are truncated first).
-        def _fmt(val, param):
-            return val[:10] if param and param.endswith("_date") else val
+            # Some endpoints expect date-only (YYYY-MM-DD) not full ISO timestamps
+            def _fmt(val, param):
+                return val[:10] if param and param.endswith("_date") else val
+            fetch_params = {
+                api_start_param: _fmt(start, api_start_param),
+                api_end_param:   _fmt(end,   api_end_param),
+            }
 
-        time_windows = []
-        if strategy == "incremental":
-            start_dt = _parse_dt(start)
-            end_dt = _parse_dt(end)
-            cur = start_dt
-            while cur < end_dt:
-                chunk_end = min(cur + timedelta(hours=1), end_dt)
-                time_windows.append((
-                    _fmt(cur.isoformat(), api_start_param),
-                    _fmt(chunk_end.isoformat(), api_end_param),
-                ))
-                cur = chunk_end
-        elif api_start_param:
-            # Full refresh: one wide window covering all history
-            time_windows.append(("2000-01-01", now_iso[:10]))
-            log.info("[%s] full reload with date window 2000-01-01 → %s", task_id, now_iso[:10])
-        else:
-            # Full refresh with no date params needed
-            time_windows.append(("", ""))
+        # Determine fetch mode: small full-refresh tables use a single request
+        # to avoid offset-pagination race (generator adding rows mid-ingestion).
+        max_fetch = SMALL_TABLE_THRESHOLD if strategy == "full" else None
 
         # Stream page-by-page into Postgres — never hold the full dataset in memory
         written = 0
         page_num = 0
-        for window_start, window_end in time_windows:
-            fetch_params = {}
-            if api_start_param:
-                fetch_params = {api_start_param: window_start, api_end_param: window_end}
-
-            for page in _fetch_pages(api_path, fetch_params):
-                if not table_exists:
-                    _ensure_table(conn, raw_schema, raw_table, pk_col, page[0])
-                    raw_cols = _raw_columns(conn, raw_schema, raw_table)
-                    table_exists = True
-                    log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
-                n = _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
-                written += n
-                page_num += 1
-                log.info("[%s] page %d: inserted %d rows (total so far: %d)", task_id, page_num, n, written)
+        for page in _fetch_pages(api_path, fetch_params, max_page_fetch=max_fetch):
+            if not table_exists:
+                _ensure_table(conn, raw_schema, raw_table, pk_col, page[0])
+                raw_cols = _raw_columns(conn, raw_schema, raw_table)
+                table_exists = True
+                log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
+            n = _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
+            written += n
+            page_num += 1
+            log.info("[%s] page %d: inserted %d rows (total so far: %d)", task_id, page_num, n, written)
 
         log.info("[%s] done — %d total rows written to %s.%s", task_id, written, raw_schema, raw_table)
 
@@ -467,10 +470,9 @@ with DAG(
 
     for schema, table_list in grouped.items():
         with TaskGroup(group_id=f"ingest_{schema}"):
-            ops = {}
             for (tid, api_path, raw_schema, raw_table, pk_col,
                  strategy, watermark_col, api_start_param, api_end_param) in table_list:
-                op = PythonOperator(
+                PythonOperator(
                     task_id=tid,
                     python_callable=ingest_table,
                     op_kwargs={
@@ -486,13 +488,3 @@ with DAG(
                     },
                     execution_timeout=timedelta(minutes=60),
                 )
-                ops[tid] = op
-
-            # FK dependency chains within schemas
-            if schema == "pos":
-                # Transactions must be ingested before their items
-                if "pos_transactions" in ops and "pos_transaction_items" in ops:
-                    ops["pos_transactions"] >> ops["pos_transaction_items"]
-                # Loyalty members must be ingested before their point transactions
-                if "pos_loyalty_members" in ops and "pos_loyalty_point_transactions" in ops:
-                    ops["pos_loyalty_members"] >> ops["pos_loyalty_point_transactions"]
