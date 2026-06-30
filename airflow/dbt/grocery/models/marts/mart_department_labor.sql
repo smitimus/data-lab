@@ -22,21 +22,12 @@ dept_agg as (
         count(case when s.status = 'called_out' then 1 end)        as called_out_shifts,
         count(case when s.status = 'no_show'    then 1 end)        as no_show_shifts,
         count(distinct s.employee_id)                               as employees_scheduled,
-        -- shift duration computed inline
-        sum(
-            extract(epoch from (s.shift_end::time - s.shift_start::time)) / 3600.0
-        )::numeric(8, 2)                                            as scheduled_hours,
+        -- shift duration from stg_hr_schedules (handles midnight-crossing shifts)
+        sum(s.scheduled_hours)::numeric(8, 2)                       as scheduled_hours,
+        sum(s.actual_hours)::numeric(8, 2)                          as actual_hours,
+        sum(e.hourly_rate * s.scheduled_hours)::numeric(10, 2)      as scheduled_cost,
         sum(case when s.status = 'completed'
-            then extract(epoch from (s.shift_end::time - s.shift_start::time)) / 3600.0
-            else 0 end
-        )::numeric(8, 2)                                            as actual_hours,
-        sum(
-            e.hourly_rate
-            * extract(epoch from (s.shift_end::time - s.shift_start::time)) / 3600.0
-        )::numeric(10, 2)                                           as scheduled_cost,
-        sum(case when s.status = 'completed'
-            then e.hourly_rate
-                 * extract(epoch from (s.shift_end::time - s.shift_start::time)) / 3600.0
+            then e.hourly_rate * s.scheduled_hours
             else 0 end
         )::numeric(10, 2)                                           as actual_cost
     from {{ ref('stg_hr_schedules') }} s

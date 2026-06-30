@@ -12,9 +12,9 @@ with schedules as (
         s.shift_start,
         s.shift_end,
         s.status,
-        -- shift duration in hours
-        extract(epoch from (s.shift_end::time - s.shift_start::time)) / 3600.0
-                                                        as scheduled_hours
+        -- shift duration in hours (handles midnight-crossing shifts)
+        s.scheduled_hours                                    as scheduled_hours,
+        s.actual_hours                                       as actual_hours
     from {{ ref('stg_hr_schedules') }} s
     where s.status <> 'scheduled'   -- only resolved
 ),
@@ -61,10 +61,8 @@ employee_daily as (
         sum(s.scheduled_hours * e.hourly_rate)::numeric(10, 2)      as scheduled_labor_cost,
         count(*)                                                     as shifts_scheduled,
         -- actuals by status
-        sum(case when s.status = 'completed'  then s.scheduled_hours else 0 end)::numeric(8, 2)
-                                                                     as actual_hours_worked,
-        sum(case when s.status = 'completed'  then s.scheduled_hours * e.hourly_rate else 0 end)::numeric(10, 2)
-                                                                     as actual_labor_cost,
+        sum(s.actual_hours)::numeric(8, 2)                           as actual_hours_worked,
+        sum(s.actual_hours * e.hourly_rate)::numeric(10, 2)          as actual_labor_cost,
         count(case when s.status = 'completed'  then 1 end)         as shifts_completed,
         count(case when s.status = 'called_out' then 1 end)         as shifts_called_out,
         count(case when s.status = 'no_show'    then 1 end)         as shifts_no_show

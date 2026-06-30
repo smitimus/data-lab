@@ -68,8 +68,6 @@ models:
       - dbt_expectations.expect_column_values_to_be_between:
           column_name: scheduled_hours
           min_value: 0
-          config:
-            severity: warn
       - dbt_expectations.expect_column_values_to_be_between:
           column_name: hours_utilization_pct
           min_value: 0

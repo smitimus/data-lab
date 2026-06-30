@@ -59,15 +59,20 @@ models:
               field: location_id
       - name: scheduled_date
         tests: [not_null]
+      - name: scheduled_hours
+        tests:
+          - not_null
+      - name: actual_hours
+        tests:
+          - not_null
     data_tests:
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: status
           value_set: ['called_out', 'completed', 'no_show', 'scheduled']
-      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
-          column_A: shift_end
-          column_B: shift_start
-          config:
-            severity: warn
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: scheduled_hours
+          min_value: 0
+          max_value: 24
 
   # ── POS ───────────────────────────────────────────────────────────────────
 
@@ -128,7 +133,28 @@ models:
           value_set: ['cash', 'credit', 'debit', 'ebt', 'loyalty_points', 'mobile_pay']
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: scenario_tag
-          value_set: ['normal', 'rush_hour']
+          value_set:
+            - normal
+            - rush_hour
+            # Seasonal holiday tags from the generator's automatic calendar
+            - memorial_day_weekend
+            - memorial_day_weekend+rush_hour
+            - thanksgiving_week
+            - thanksgiving_week+rush_hour
+            - christmas
+            - christmas+rush_hour
+            - pre_christmas
+            - pre_christmas+rush_hour
+            - new_years_eve
+            - new_years_eve+rush_hour
+            - super_bowl
+            - super_bowl+rush_hour
+            - independence_day
+            - independence_day+rush_hour
+            - labor_day_weekend
+            - labor_day_weekend+rush_hour
+            - halloween
+            - halloween+rush_hour
       - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
           column_A: total
           column_B: subtotal
