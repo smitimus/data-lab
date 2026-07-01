@@ -47,7 +47,8 @@ EDW_CONN = {
     "password": "postgres",
 }
 PAGE_SIZE = 1000
-SMALL_TABLE_THRESHOLD = 100_000  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
+API_MAX_LIMIT = 2000  # Verisim API cap (returns 422 if exceeded)
+SMALL_TABLE_THRESHOLD = API_MAX_LIMIT  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
 INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty
 
 # ---------------------------------------------------------------------------
@@ -251,10 +252,29 @@ def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
         if not page:
             return
         log.info("  %s: fetched %d rows (single request, limit=%d)", path, len(page), max_page_fetch)
-        if len(page) == max_page_fetch:
-            log.warning("  %s: response hit the threshold limit (%d) — may be truncated; raise SMALL_TABLE_THRESHOLD if needed", path, max_page_fetch)
         yield page
-        return
+        if len(page) < max_page_fetch:
+            # The entire dataset fit in one request — done
+            return
+        # Response hit the API limit — there may be more data; continue with pagination
+        # NOTE: the first page was already yielded above
+        offset = max_page_fetch
+        p = {**params, "limit": PAGE_SIZE, "offset": offset}
+        while True:
+            resp = requests.get(url, params=p, timeout=60)
+            if resp.status_code >= 500:
+                log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
+                return
+            resp.raise_for_status()
+            data = resp.json()
+            page = data if isinstance(data, list) else data.get("data", [])
+            if not page:
+                return
+            log.info("  %s: fetched %d rows (offset=%d)", path, len(page), offset)
+            yield page
+            if len(page) < PAGE_SIZE:
+                return
+            offset += PAGE_SIZE
 
     offset = 0
     while True:
