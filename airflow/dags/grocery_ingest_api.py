@@ -49,6 +49,7 @@ EDW_CONN = {
 PAGE_SIZE = 1000
 API_MAX_LIMIT = 2000  # Verisim API cap (returns 422 if exceeded)
 SMALL_TABLE_THRESHOLD = API_MAX_LIMIT  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
+MAX_PAGES = 10_000  # safety cap: fail if pagination exceeds this (infinite loop guard for volatile endpoints)
 INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty
 
 # ---------------------------------------------------------------------------
@@ -233,66 +234,65 @@ def _get_watermark(conn, schema: str, table: str, col: str) -> str:
 def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
     """Generator: yield one page of rows at a time, never accumulating all rows in memory.
 
-    When max_page_fetch is set (e.g. SMALL_TABLE_THRESHOLD), issues a single request
-    with that as the limit and no pagination. This avoids the offset-pagination race
-    where the Verisim generator inserting new rows mid-ingestion shifts pages and
-    causes silent row skips. Incremental tables continue paginating with PAGE_SIZE.
+    Pagination stops when one of these conditions is met (checked in order):
+    1. Empty page → source has no more data (return)
+    2. Page has fewer rows than requested → last page (return)
+    3. Page count exceeds MAX_PAGES → RuntimeError (infinite-loop guard)
+    4. offset >= snapshot_total from the API's `total` field → boundary reached (return)
+
+    When max_page_fetch is set the first request uses that limit (avoids offset-pagination
+    race for small tables), then falls back to PAGE_SIZE for subsequent pages.
     """
     url = f"{API_BASE}{path}"
-    if max_page_fetch:
-        # Single request — no pagination, no race
-        p = {**params, "limit": max_page_fetch, "offset": 0}
-        resp = requests.get(url, params=p, timeout=120)
-        if resp.status_code >= 500:
-            log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
-            return
-        resp.raise_for_status()
-        data = resp.json()
-        page = data if isinstance(data, list) else data.get("data", [])
-        if not page:
-            return
-        log.info("  %s: fetched %d rows (single request, limit=%d)", path, len(page), max_page_fetch)
-        yield page
-        if len(page) < max_page_fetch:
-            # The entire dataset fit in one request — done
-            return
-        # Response hit the API limit — there may be more data; continue with pagination
-        # NOTE: the first page was already yielded above
-        offset = max_page_fetch
-        p = {**params, "limit": PAGE_SIZE, "offset": offset}
-        while True:
-            resp = requests.get(url, params=p, timeout=60)
-            if resp.status_code >= 500:
-                log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
-                return
-            resp.raise_for_status()
-            data = resp.json()
-            page = data if isinstance(data, list) else data.get("data", [])
-            if not page:
-                return
-            log.info("  %s: fetched %d rows (offset=%d)", path, len(page), offset)
-            yield page
-            if len(page) < PAGE_SIZE:
-                return
-            offset += PAGE_SIZE
-
+    page_limit = max_page_fetch or PAGE_SIZE
     offset = 0
+    snapshot_total = None
+    pages = 0
+    timeout_s = 120 if max_page_fetch else 60
+
     while True:
-        p = {**params, "limit": PAGE_SIZE, "offset": offset}
-        resp = requests.get(url, params=p, timeout=60)
+        p = {**params, "limit": page_limit, "offset": offset}
+        resp = requests.get(url, params=p, timeout=timeout_s)
         if resp.status_code >= 500:
             log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
             return
         resp.raise_for_status()
         data = resp.json()
         page = data if isinstance(data, list) else data.get("data", [])
+
+        # Capture the snapshot total from the first API response if available
+        if snapshot_total is None and isinstance(data, dict) and "total" in data:
+            snapshot_total = data["total"]
+            log.info("  %s: API reports total=%d rows", path, snapshot_total)
+
         if not page:
             return
-        log.info("  %s: fetched %d rows (offset=%d)", path, len(page), offset)
+
+        pages += 1
+        if pages > MAX_PAGES:
+            raise RuntimeError(
+                f"{path}: pagination exceeded {MAX_PAGES} pages — "
+                f"infinite loop detected on volatile endpoint (offset={offset})"
+            )
+
+        log.info("  %s: fetched %d rows (offset=%d, page=%d)", path, len(page), offset, pages)
         yield page
-        if len(page) < PAGE_SIZE:
+
+        # Last page: returned fewer rows than requested
+        if len(page) < page_limit:
             return
-        offset += PAGE_SIZE
+
+        offset += page_limit
+
+        # Snapshot boundary: we've consumed all rows that existed when we started
+        if snapshot_total is not None and offset >= snapshot_total:
+            log.info("  %s: reached snapshot boundary (offset=%d, total=%d)", path, offset, snapshot_total)
+            return
+
+        # After the first oversized request, switch to standard page size
+        if page_limit != PAGE_SIZE:
+            page_limit = PAGE_SIZE
+            timeout_s = 60
 
 
 def _coerce(val: Any) -> Any:
