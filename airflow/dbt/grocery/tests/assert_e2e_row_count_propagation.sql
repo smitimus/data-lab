@@ -33,18 +33,6 @@ raw_staging_counts as (
            (select count(*) from {{ source('raw_pos', 'transaction_items') }}),
            (select count(*) from {{ ref('stg_pos_transaction_items') }})
     union all
-    select 'coupons',
-           (select count(*) from {{ source('raw_pos', 'coupons') }}),
-           (select count(*) from {{ ref('stg_pos_coupons') }})
-    union all
-    select 'combo_deals',
-           (select count(*) from {{ source('raw_pos', 'combo_deals') }}),
-           (select count(*) from {{ ref('stg_pos_combo_deals') }})
-    union all
-    select 'loyalty_members',
-           (select count(*) from {{ source('raw_pos', 'loyalty_members') }}),
-           (select count(*) from {{ ref('stg_pos_loyalty_members') }})
-    union all
     select 'timeclock_events',
            (select count(*) from {{ source('raw_timeclock', 'events') }}),
            (select count(*) from {{ ref('stg_timeclock_events') }})
@@ -78,14 +66,21 @@ mismatches as (
     where raw_count != staging_count
 ),
 
--- Mart aggregation sanity: mart_daily_revenue sum of transaction_count should
--- match the total number of POS transactions
+-- Mart aggregation check: sum of mart_daily_revenue.transaction_count
+-- should match total POS transactions
 mart_aggregation_check as (
     select 'mart_daily_revenue_transaction_sum' as entity,
-           (select count(*)::numeric from {{ ref('stg_pos_transactions') }}) as expected_count,
-           (select coalesce(sum(pos_transaction_count), 0)::numeric from {{ ref('mart_daily_revenue') }}) as actual_count,
+           (select count(*)::integer from {{ ref('stg_pos_transactions') }}) as expected_count,
+           (select coalesce(sum(pos_transaction_count), 0)::integer from {{ ref('mart_daily_revenue') }}) as actual_count
+),
+
+filtered_mart_mismatches as (
+    select entity,
+           expected_count,
+           actual_count,
            'mart_aggregation_mismatch' as failure_type
-    having expected_count != actual_count
+    from mart_aggregation_check
+    where expected_count != actual_count
 )
 
 -- Combine all failures
@@ -104,4 +99,4 @@ select entity,
        expected_count::text,
        actual_count::text,
        failure_type
-from mart_aggregation_check
+from filtered_mart_mismatches

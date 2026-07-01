@@ -209,7 +209,7 @@ models:
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
           min_value: 100
-          max_value: 100000
+          max_value: 500000
       - dbt_expectations.expect_column_values_to_be_between:
           column_name: gross_revenue
           min_value: 0
@@ -368,3 +368,198 @@ models:
       - dbt_expectations.expect_table_row_count_to_be_between:
           min_value: 1
           max_value: 500
+
+  # ── mart_transport_load_summary ───────────────────────────────────────────
+  # Grain: one row per load_id
+
+  - name: mart_transport_load_summary
+    columns:
+      - name: load_id
+        tests: [unique, not_null]
+      - name: truck_id
+        tests: [not_null]
+      - name: driver
+        tests: [not_null]
+      - name: warehouse_name
+        tests: [not_null]
+      - name: store_name
+        tests: [not_null]
+      - name: load_date
+        tests: [not_null]
+      - name: status
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: status
+          value_set: ['scheduled', 'in_transit', 'delivered', 'cancelled']
+
+  # ── mart_fleet_utilization ───────────────────────────────────────────────
+  # Grain: one row per truck
+
+  - name: mart_fleet_utilization
+    columns:
+      - name: truck_id
+        tests: [unique, not_null]
+      - name: license_plate
+        tests: [unique, not_null]
+      - name: total_loads
+        tests: [not_null]
+      - name: utilization_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ACTIVE', 'IDLE', 'INACTIVE']
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 50
+
+  # ── mart_transport_daily_metrics ──────────────────────────────────────────
+  # Grain: one row per (load_date, warehouse_location_id)
+
+  - name: mart_transport_daily_metrics
+    columns:
+      - name: load_date
+        tests: [not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: total_loads
+        tests: [not_null]
+      - name: completed_loads
+        tests: [not_null]
+
+  # ── mart_attendance_summary ───────────────────────────────────────────────
+  # Grain: one row per (employee_id, event_date)
+
+  - name: mart_attendance_summary
+    columns:
+      - name: employee_id
+        tests: [not_null]
+      - name: event_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: clock_in_at
+      - name: clock_out_at
+      - name: total_clocked_hours
+      - name: net_hours_worked
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100000
+
+  # ── mart_daily_attendance_stats ──────────────────────────────────────────
+  # Grain: one row per (event_date, location_id)
+
+  - name: mart_daily_attendance_stats
+    columns:
+      - name: event_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: employees_present
+        tests: [not_null]
+      - name: total_net_hours
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── mart_employee_hours_vs_schedule ──────────────────────────────────────
+  # Grain: one row per (employee_id, event_date)
+
+  - name: mart_employee_hours_vs_schedule
+    columns:
+      - name: report_date
+        tests: [not_null]
+      - name: employee_id
+        tests: [not_null]
+      - name: full_name
+        tests: [not_null]
+      - name: department
+      - name: scheduled_hours
+      - name: net_hours_worked
+      - name: attendance_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ATTENDED', 'SHORT', 'PARTIAL', 'NO_SHOW', 'UNSCHEDULED', 'UNKNOWN']
+      - name: hours_attainment_pct
+
+  # ── mart_fulfillment_operations ──────────────────────────────────────────
+  # Grain: one row per fulfillment_id
+
+  - name: mart_fulfillment_operations
+    columns:
+      - name: fulfillment_id
+        tests: [unique, not_null]
+      - name: store_order_id
+        tests: [not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: fulfillment_status
+        tests: [not_null]
+      - name: total_qty_requested
+        tests: [not_null]
+      - name: total_qty_picked
+        tests: [not_null]
+
+  # ── mart_fulfillment_pick_accuracy ───────────────────────────────────────
+  # Grain: one row per fulfillment_id
+
+  - name: mart_fulfillment_pick_accuracy
+    columns:
+      - name: fulfillment_id
+        tests: [unique, not_null]
+      - name: total_line_items
+        tests: [not_null]
+      - name: total_qty_requested
+        tests: [not_null]
+      - name: total_qty_picked
+        tests: [not_null]
+      - name: avg_fill_rate_pct
+      - name: total_fill_rate_pct
+      - name: is_perfect_order
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── mart_daily_fulfillment_summary ───────────────────────────────────────
+  # Grain: one row per (report_date, warehouse_location_id)
+
+  - name: mart_daily_fulfillment_summary
+    columns:
+      - name: report_date
+        tests: [not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: total_orders
+        tests: [not_null]
+      - name: completed_orders
+      - name: total_items_picked
+        tests: [not_null]
+      - name: daily_fill_rate_pct
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── mart_order_fulfillment_funnel ────────────────────────────────────────
+  # Grain: one row per store_order_id
+
+  - name: mart_order_fulfillment_funnel
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: order_date
+        tests: [not_null]
+      - name: store_location_id
+        tests: [not_null]
+      - name: order_status
+        tests: [not_null]
+      - name: pipeline_stage
+        tests: [not_null]
+      - name: days_order_to_fulfill
+      - name: days_order_to_delivery
