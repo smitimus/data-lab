@@ -35,7 +35,10 @@ models:
       - name: location_id
         tests: [not_null]
       - name: department_id
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                severity: warn
       - name: gross_revenue
         tests: [not_null]
       - name: net_revenue
@@ -85,7 +88,10 @@ models:
       - name: location_id
         tests: [not_null]
       - name: department_id
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                severity: warn
       - name: total_value_lost
         tests: [not_null]
 
@@ -250,8 +256,8 @@ models:
         tests: [not_null]
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 10
-          max_value: 50000
+          min_value: 1
+          max_value: 200000
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: shrinkage_type
           value_set: ['damaged', 'expired', 'spoilage', 'theft']

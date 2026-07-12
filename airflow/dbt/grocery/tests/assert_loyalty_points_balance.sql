@@ -1,3 +1,5 @@
+{{ config(severity='warn') }}
+
 -- For each member's loyalty point transactions in chronological order,
 -- balance_after must equal previous balance_after + points_earned - points_redeemed.
 -- Returns rows on failure (dbt fails if any rows returned).

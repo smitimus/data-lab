@@ -47,7 +47,7 @@ EDW_CONN = {
     "password": "postgres",
 }
 PAGE_SIZE = 1000
-API_MAX_LIMIT = 2000  # Verisim API cap (returns 422 if exceeded)
+API_MAX_LIMIT = 1000  # Verisim API cap (returns 422 if exceeded)
 SMALL_TABLE_THRESHOLD = API_MAX_LIMIT  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
 MAX_PAGES = 10_000  # safety cap: fail if pagination exceeds this (infinite loop guard for volatile endpoints)
 INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty

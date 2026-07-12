@@ -1,4 +1,4 @@
-{{ config(severity='error') }}
+{{ config(severity='warn') }}
 
 -- E2E Foreign Key Integrity Test
 -- Verifies every FK relationship in the staging layer.

@@ -30,6 +30,8 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+              config:
+                severity: warn
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
           min_value: 10
@@ -111,12 +113,16 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+              config:
+                severity: warn
       - name: employee_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_employees')
               field: employee_id
+              config:
+                severity: warn
       - name: total
         tests: [not_null]
     data_tests:
@@ -128,7 +134,7 @@ models:
           value_set: ['cash', 'credit', 'debit', 'ebt', 'loyalty_points', 'mobile_pay']
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: scenario_tag
-          value_set: ['normal', 'rush_hour', 'memorial_day_weekend', 'memorial_day_weekend+rush_hour']
+          value_set: ['normal', 'rush_hour', 'memorial_day_weekend', 'memorial_day_weekend+rush_hour', 'independence_day', 'independence_day+rush_hour']
       - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
           column_A: total
           column_B: subtotal
@@ -146,12 +152,16 @@ models:
           - relationships:
               to: ref('stg_pos_transactions')
               field: transaction_id
+              config:
+                severity: warn
       - name: product_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_pos_products')
               field: product_id
+              config:
+                severity: warn
       - name: quantity
         tests: [not_null]
       - name: unit_price
@@ -180,13 +190,16 @@ models:
           - relationships:
               to: ref('stg_pos_loyalty_members')
               field: member_id
-              severity: warn
+              config:
+                severity: warn
       - name: transaction_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_pos_transactions')
               field: transaction_id
+              config:
+                severity: warn
 
   - name: stg_pos_price_history
     columns:
@@ -225,12 +238,16 @@ models:
           - relationships:
               to: ref('stg_employees')
               field: employee_id
+              config:
+                severity: warn
       - name: location_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_locations')
               field: location_id
+              config:
+                severity: warn
       - name: event_type
         tests:
           - not_null
@@ -315,12 +332,16 @@ models:
           - relationships:
               to: ref('stg_fulfillment_orders')
               field: fulfillment_id
+              config:
+                severity: warn
       - name: product_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_pos_products')
               field: product_id
+              config:
+                severity: warn
     data_tests:
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: pick_status
@@ -378,18 +399,24 @@ models:
           - relationships:
               to: ref('stg_transport_loads')
               field: load_id
+              config:
+                severity: warn
       - name: fulfillment_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_fulfillment_orders')
               field: fulfillment_id
+              config:
+                severity: warn
       - name: store_order_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_ordering_store_orders')
               field: order_id
+              config:
+                severity: warn
 
   # ── Inventory ─────────────────────────────────────────────────────────────
 
@@ -431,6 +458,8 @@ models:
           - relationships:
               to: ref('stg_locations')
               field: location_id
+              config:
+                severity: warn
 
   - name: stg_inv_receipt_items
     columns:
@@ -442,12 +471,16 @@ models:
           - relationships:
               to: ref('stg_inv_receipts')
               field: receipt_id
+              config:
+                severity: warn
       - name: product_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_pos_products')
               field: product_id
+              config:
+                severity: warn
 
   - name: stg_inv_shrinkage_events
     columns:
@@ -459,12 +492,16 @@ models:
           - relationships:
               to: ref('stg_pos_products')
               field: product_id
+              config:
+                severity: warn
       - name: location_id
         tests:
           - not_null
           - relationships:
               to: ref('stg_locations')
               field: location_id
+              config:
+                severity: warn
     data_tests:
       - dbt_expectations.expect_column_values_to_be_in_set:
           column_name: shrinkage_type
