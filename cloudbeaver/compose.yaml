@@ -4,16 +4,27 @@
 # 260320 - consolidated data/ into conf/
 # 260321 - added verisim_network for direct access to verisim-base-postgres
 # 260426 - removed verisim_network: release stack uses published ports (5499), not docker network
+# 260712 - added CB_* env vars + seed initial-data.conf for admin/admin pre-seeding; pinned to 25.3.5 (26.x has H2 migration bug)
 
 services:
   cloudbeaver:
     container_name: cloudbeaver
-    image: dbeaver/cloudbeaver:latest
+    image: dbeaver/cloudbeaver:25.3.5
     environment:
       TZ: ${TZ}
+      CB_SERVER_NAME: "Data Lab"
+      CB_SERVER_URL: "http://192.168.1.4:8978/"
+      CB_ADMIN_NAME: "admin"
+      CB_ADMIN_PASSWORD: "admin"
+      # Relax password policy to allow simple "admin" password
+      CLOUDBEAVER_POLICY_MIN_LENGTH: "5"
+      CLOUDBEAVER_POLICY_MIN_NUMBER_COUNT: "0"
+      CLOUDBEAVER_POLICY_REQUIRE_MIXED_CASE: "false"
     volumes:
       - ${CONF}/cloudbeaver/workspace:/opt/cloudbeaver/workspace
       - ${CONF}/cloudbeaver/logs:/opt/cloudbeaver/logs
+      # Override built-in initial-data.conf to pre-set admin/admin credentials
+      - ./seed/GlobalConfiguration/initial-data.conf:/opt/cloudbeaver/conf/initial-data.conf:ro
     ports:
       - ${CLOUDBEAVER_PORT:-8978}:8978
     restart: always
@@ -22,7 +33,7 @@ services:
       - homepage.name=CloudBeaver
       - homepage.icon=cloudbeaver.png
       - homepage.href=http://${IP}:${CLOUDBEAVER_PORT:-8978}/
-      - homepage.description=Database viewer — first-run creates admin account (port 8978)
+      - homepage.description=Database viewer — admin/admin (port 8978)
     networks:
       - cloudbeaver_network
       - postgres_network

@@ -8,10 +8,10 @@ Usage:
   python3 create_grocery_ops_dashboard.py [--superset-url URL] [--username USER] [--password PASS]
 """
 
+import argparse
 import json
 import sys
 import os
-import uuid
 from urllib.parse import urljoin
 
 try:
@@ -22,19 +22,53 @@ except ImportError:
     import requests
 
 # ── Config ──────────────────────────────────────────────────────────────────
-SUPERSET_URL = "http://192.168.1.4:8088"
+SUPERSET_URL = "http://superset:8088"
 USERNAME = "admin"
 PASSWORD = "admin"
 
-GROCERY_DB_ID = 3
 
-# Known dataset IDs (set after first run)
-DS_IDS = {
-    "mart_inventory_turnover": 15,
-    "mart_hourly_sales_pattern": 16,
-    "mart_delivery_performance": 17,
-    "mart_store_weekly_summary": 18,
-}
+def find_grocery_db_id(token, base_url):
+    """Find the Grocery database ID by name."""
+    r = requests.get(f"{base_url}/api/v1/database/", headers=headers(token))
+    r.raise_for_status()
+    for db in r.json().get("result", []):
+        if db["database_name"] == "Grocery":
+            return db["id"]
+    raise RuntimeError("Grocery database not found in Superset")
+
+
+def find_dataset_ids(token, base_url, db_id, table_names):
+    """Find dataset IDs for the given mart table names. Returns {table_name: id}."""
+    r = requests.get(
+        f"{base_url}/api/v1/dataset/",
+        headers=headers(token),
+        params={"q": json.dumps({"page_size": 200})},
+    )
+    r.raise_for_status()
+    result = {}
+    for d in r.json().get("result", []):
+        if d["database"]["id"] == db_id and d["table_name"] in table_names:
+            result[d["table_name"]] = d["id"]
+    for t in table_names:
+        if t not in result:
+            print(f"  WARNING: dataset '{t}' not found — registering...")
+            ds_id = register_dataset(token, base_url, db_id, t)
+            if ds_id:
+                result[t] = ds_id
+    return result
+
+
+def register_dataset(token, base_url, db_id, table_name, schema="mart"):
+    """Register an existing database table as a Superset dataset."""
+    payload = {"database": db_id, "schema": schema, "table_name": table_name}
+    r = requests.post(f"{base_url}/api/v1/dataset/", headers=headers(token), json=payload, timeout=10)
+    if r.status_code in (200, 201):
+        ds_id = r.json()["id"]
+        print(f"  ✓ Registered '{schema}.{table_name}' (id={ds_id})")
+        return ds_id
+    else:
+        print(f"  ✗ Failed to register '{schema}.{table_name}': {r.status_code} {r.text[:200]}")
+        return None
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 def get_token(url, username, password):
@@ -47,9 +81,9 @@ def headers(token):
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # ── Set main_dttm_col on datasets ────────────────────────────────────────────
-def set_main_dttm(token, ds_id, col):
+def set_main_dttm(token, base_url, ds_id, col):
     """Set the main datetime column on a dataset via PUT."""
-    resp = requests.put(urljoin(SUPERSET_URL, f"/api/v1/dataset/{ds_id}"),
+    resp = requests.put(urljoin(base_url, f"/api/v1/dataset/{ds_id}"),
         headers=headers(token),
         json={"main_dttm_col": col}, timeout=10)
     if resp.status_code == 200:
@@ -267,8 +301,8 @@ CHARTS = [
     },
 ]
 
-def create_chart(token, chart_def):
-    ds_id = DS_IDS.get(chart_def["ds_key"])
+def create_chart(token, base_url, chart_def, ds_ids):
+    ds_id = ds_ids.get(chart_def["ds_key"])
     if not ds_id:
         print(f"  ✗ No dataset ID for '{chart_def['ds_key']}'")
         return None
@@ -280,7 +314,7 @@ def create_chart(token, chart_def):
         chart_def["params"],
     )
 
-    resp = requests.post(urljoin(SUPERSET_URL, "/api/v1/chart/"),
+    resp = requests.post(urljoin(base_url, "/api/v1/chart/"),
         headers=headers(token), json=payload, timeout=30)
 
     if resp.status_code == 201:
@@ -293,7 +327,7 @@ def create_chart(token, chart_def):
         print(f"  ✗ Failed '{chart_def['slice_name']}': {resp.status_code} {resp.text[:300]}")
         return None
 
-def create_dashboard(token, chart_ids):
+def create_dashboard(token, base_url, chart_ids):
     """Create dashboard with charts arranged in rows of 3."""
     import random, string
     
@@ -347,7 +381,7 @@ def create_dashboard(token, chart_ids):
         }),
     }
 
-    resp = requests.post(urljoin(SUPERSET_URL, "/api/v1/dashboard/"),
+    resp = requests.post(urljoin(base_url, "/api/v1/dashboard/"),
         headers=headers(token), json=payload, timeout=30)
 
     if resp.status_code == 201:
@@ -357,7 +391,7 @@ def create_dashboard(token, chart_ids):
     else:
         # Dashboard may already exist — try fetching it
         if resp.status_code == 422:
-            list_r = requests.get(urljoin(SUPERSET_URL, "/api/v1/dashboard/"),
+            list_r = requests.get(urljoin(base_url, "/api/v1/dashboard/"),
                 headers=headers(token),
                 params={"q": '(page:0,page_size:50,filters:!((col:slug,opr:eq,value:grocery-operations)))'},
                 timeout=10)
@@ -365,7 +399,7 @@ def create_dashboard(token, chart_ids):
                 for d in list_r.json().get("result", []):
                     if d.get("slug") == "grocery-operations":
                         print(f"  ℹ Dashboard already exists (ID={d['id']}) — updating with PUT")
-                        resp2 = requests.put(urljoin(SUPERSET_URL, f"/api/v1/dashboard/{d['id']}"),
+                        resp2 = requests.put(urljoin(base_url, f"/api/v1/dashboard/{d['id']}"),
                             headers=headers(token), json=payload, timeout=30)
                         if resp2.status_code == 200:
                             print(f"  ✓ Dashboard updated (ID={d['id']})")
@@ -378,41 +412,63 @@ def create_dashboard(token, chart_ids):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Create Grocery Operations dashboard")
+    parser.add_argument("--superset-url", default=SUPERSET_URL)
+    parser.add_argument("--username", default=USERNAME)
+    parser.add_argument("--password", default=PASSWORD)
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Grocery Operations Dashboard Creator")
     print("=" * 60)
     
-    token = get_token(SUPERSET_URL, USERNAME, PASSWORD)
+    token = get_token(args.superset_url, args.username, args.password)
     print("✓ Authenticated\n")
 
+    # Dynamically discover grocery DB ID and dataset IDs
+    print("Discovering database and datasets...")
+    grocery_db_id = find_grocery_db_id(token, args.superset_url)
+    print(f"  Grocery DB ID: {grocery_db_id}")
+
+    needed_tables = [
+        "mart_inventory_turnover",
+        "mart_hourly_sales_pattern",
+        "mart_delivery_performance",
+        "mart_store_weekly_summary",
+    ]
+    ds_ids = find_dataset_ids(token, args.superset_url, grocery_db_id, needed_tables)
+    print(f"  Found datasets: {list(ds_ids.keys())}")
+
     # Step 1: Set main_dttm_col on datasets that have date columns
-    print("Step 1: Configure dataset date columns...")
-    set_main_dttm(token, 17, "report_week_start")   # mart_delivery_performance
-    set_main_dttm(token, 18, "week_start")           # mart_store_weekly_summary
-    # mart_inventory_turnover has last_updated but it's not really a time-dim column
-    # mart_hourly_sales_pattern has no date column
+    print("\nStep 1: Configure dataset date columns...")
+    for table, col in [
+        ("mart_delivery_performance", "report_week_start"),
+        ("mart_store_weekly_summary", "week_start"),
+    ]:
+        if table in ds_ids and ds_ids[table]:
+            set_main_dttm(token, args.superset_url, ds_ids[table], col)
     print()
 
     # Step 2: Create charts
     print("Step 2: Creating charts...")
     chart_results = []
     for ch in CHARTS:
-        result = create_chart(token, ch)
+        result = create_chart(token, args.superset_url, ch, ds_ids)
         if result:
             chart_results.append((result["id"], result["slice_name"]))
     print(f"  Charts created: {len(chart_results)}/{len(CHARTS)}\n")
 
     # Step 3: Create/update dashboard
     print("Step 3: Creating dashboard...")
-    dash = create_dashboard(token, chart_results)
+    dash = create_dashboard(token, args.superset_url, chart_results)
     if dash:
         dash_id = dash.get("id") or (dash.get("result", {}) or {}).get("id", "?")
         print(f"\n✅ Dashboard ready!")
-        print(f"   URL: {SUPERSET_URL}/superset/dashboard/{dash_id}/")
+        print(f"   URL: {args.superset_url}/superset/dashboard/{dash_id}/")
     else:
         print("❌ Dashboard creation failed. Charts are still available individually.")
         for cid, cname in chart_results:
-            print(f"   Chart: {SUPERSET_URL}/explore/?datasource_type=table&datasource_id={cid}")
+            print(f"   Chart: {args.superset_url}/explore/?datasource_type=table&datasource_id={cid}")
 
     print("\nDone.")
 

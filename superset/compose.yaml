@@ -97,7 +97,7 @@ services:
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
     volumes:
       - ${CONF}/superset:/app/superset_home
-    command: ["bash", "-c", "pip install --quiet requests && python /app/superset_home/setup.py"]
+    command: ["bash", "-c", "pip install --quiet requests && python /app/superset_home/setup.py && python /app/superset_home/create_grocery_ops_dashboard.py --superset-url http://superset:8088 && python /app/superset_home/create_missing_dashboards.py --superset-url http://superset:8088 && python /app/superset_home/create_data_quality_dashboard.py --superset-url http://superset:8088"]
     depends_on:
       superset:
         condition: service_healthy

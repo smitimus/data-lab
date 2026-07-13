@@ -20,7 +20,7 @@ services:
     entrypoint:
       - bash
       - -c
-      - "until dbt debug --quiet 2>/dev/null; do sleep 5; done && dbt docs generate && dbt docs serve --host 0.0.0.0 --port 8080"
+      - "dbt deps && until dbt debug --quiet 2>/dev/null; do sleep 5; done && dbt docs generate && dbt docs serve --host 0.0.0.0 --port 8080"
     ports:
       - "${DBT_DOCS_PORT:-8082}:8080"
     restart: unless-stopped

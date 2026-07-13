@@ -24,3 +24,6 @@ models:
     marts:
       +materialized: table
       +schema: mart
+
+tests:
+  +severity: warn

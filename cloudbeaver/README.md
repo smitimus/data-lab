@@ -4,8 +4,8 @@
 | Item     | Value                              |
 |----------|------------------------------------|
 | URL      | http://YOUR_SERVER_IP:8978         |
-| Username | Set on first login                 |
-| Password | Set on first login                 |
+| Username | admin                              |
+| Password | admin                              |
 | Port     | 8978                               |
 
 ## What It Does
@@ -18,7 +18,8 @@ Web-based database IDE (DBeaver in a browser). Pre-configured with connections t
 - `conf/cloudbeaver/GlobalConfiguration/` — connection definitions (seeded from `stacks/cloudbeaver/data-sources.json` by `init.sh`)
 
 ## Usage Notes
-- **First login:** CloudBeaver prompts to create an admin account on first visit. Choose any username/password.
+- **Admin credentials:** `admin` / `admin` (set via `CB_ADMIN_NAME` and `CB_ADMIN_PASSWORD` in compose.yaml)
 - Connections are pre-loaded — expand the connection tree on the left to browse tables
 - SQL editor: right-click a database → SQL Editor
 - If connections disappear after a reset, re-run `init.sh` to reseed from `stacks/cloudbeaver/data-sources.json`
+

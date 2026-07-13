@@ -93,6 +93,9 @@ cp $STACKS/superset/superset_config.py $CONF/superset/superset_config.py
 # setup.py — Python script run by the superset-setup container on first boot
 # to auto-provision the EDW database connection and import dashboards.
 cp $STACKS/superset/setup.py $CONF/superset/setup.py
+cp $STACKS/superset/create_missing_dashboards.py $CONF/superset/create_missing_dashboards.py
+cp $STACKS/superset/create_grocery_ops_dashboard.py $CONF/superset/create_grocery_ops_dashboard.py
+cp $STACKS/superset/create_data_quality_dashboard.py $CONF/superset/create_data_quality_dashboard.py
 
 echo "=== Seeding cloudbeaver workspace ==="
 mkdir -p $CONF/cloudbeaver/workspace/GlobalConfiguration/.dbeaver

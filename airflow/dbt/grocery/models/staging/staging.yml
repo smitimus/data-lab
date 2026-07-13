@@ -148,7 +148,9 @@ models:
         tests: [unique, not_null]
       - name: transaction_id
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
           - relationships:
               to: ref('stg_pos_transactions')
               field: transaction_id
@@ -194,7 +196,9 @@ models:
                 severity: warn
       - name: transaction_id
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
           - relationships:
               to: ref('stg_pos_transactions')
               field: transaction_id

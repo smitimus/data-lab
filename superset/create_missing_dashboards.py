@@ -20,10 +20,19 @@ except ImportError:
     os.system(f"{sys.executable} -m pip install requests -q")
     import requests
 
-SUPERSET_URL = "http://192.168.1.4:8088"
+SUPERSET_URL = "http://superset:8088"
 USERNAME = "admin"
 PASSWORD = "admin"
-GROCERY_DB_ID = 3
+
+
+def find_grocery_db_id(token, base_url):
+    """Find the Grocery database ID by name."""
+    r = requests.get(f"{base_url}/api/v1/database/", headers=headers(token))
+    r.raise_for_status()
+    for db in r.json().get("result", []):
+        if db["database_name"] == "Grocery":
+            return db["id"]
+    raise RuntimeError("Grocery database not found in Superset")
 
 
 def get_token(url, username, password):
@@ -49,15 +58,15 @@ def make_metric(col, agg="SUM", label=None):
     }
 
 
-def register_dataset(token, table_name, schema="mart"):
+def register_dataset(token, base_url, db_id, table_name, schema="mart"):
     payload = {
-        "database": GROCERY_DB_ID,
+        "database": db_id,
         "schema": schema,
         "table_name": table_name,
         "owners": [1],
     }
     resp = requests.post(
-        urljoin(SUPERSET_URL, "/api/v1/dataset/"),
+        urljoin(base_url, "/api/v1/dataset/"),
         headers=headers(token),
         json=payload,
         timeout=10,
@@ -74,9 +83,9 @@ def register_dataset(token, table_name, schema="mart"):
         return None
 
 
-def set_main_dttm(token, ds_id, col):
+def set_main_dttm(token, base_url, ds_id, col):
     resp = requests.put(
-        urljoin(SUPERSET_URL, f"/api/v1/dataset/{ds_id}"),
+        urljoin(base_url, f"/api/v1/dataset/{ds_id}"),
         headers=headers(token),
         json={"main_dttm_col": col},
         timeout=10,
@@ -89,7 +98,7 @@ def set_main_dttm(token, ds_id, col):
         return False
 
 
-def create_chart(token, ds_id, slice_name, viz_type, params_extra):
+def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
     base_params = {
         "datasource": f"{ds_id}__table",
         "viz_type": viz_type,
@@ -107,7 +116,7 @@ def create_chart(token, ds_id, slice_name, viz_type, params_extra):
         "dashboards": [],
     }
     resp = requests.post(
-        urljoin(SUPERSET_URL, "/api/v1/chart/"),
+        urljoin(base_url, "/api/v1/chart/"),
         headers=headers(token),
         json=payload,
         timeout=30,
@@ -121,7 +130,7 @@ def create_chart(token, ds_id, slice_name, viz_type, params_extra):
         return None
 
 
-def create_dashboard(token, chart_ids, title, slug):
+def create_dashboard(token, base_url, chart_ids, title, slug):
     position = {
         "DASHBOARD_VERSION_KEY": "v2",
         "ROOT_ID": {"type": "ROOT", "id": "ROOT_ID", "children": ["GRID_ID"]},
@@ -174,7 +183,7 @@ def create_dashboard(token, chart_ids, title, slug):
 
     # Check if dashboard with this slug already exists
     list_r = requests.get(
-        urljoin(SUPERSET_URL, "/api/v1/dashboard/"),
+        urljoin(base_url, "/api/v1/dashboard/"),
         headers=headers(token),
         params={"q": f'(page:0,page_size:50,filters:!((col:slug,opr:eq,value:{slug})))'},
         timeout=10,
@@ -184,7 +193,7 @@ def create_dashboard(token, chart_ids, title, slug):
             if d.get("slug") == slug:
                 print(f"  ℹ Dashboard '{title}' exists (ID={d['id']}) — updating")
                 resp2 = requests.put(
-                    urljoin(SUPERSET_URL, f"/api/v1/dashboard/{d['id']}"),
+                    urljoin(base_url, f"/api/v1/dashboard/{d['id']}"),
                     headers=headers(token),
                     json=payload,
                     timeout=30,
@@ -192,14 +201,14 @@ def create_dashboard(token, chart_ids, title, slug):
                 if resp2.status_code == 200:
                     print(f"  ✓ Updated (ID={d['id']})")
                     # Re-link charts
-                    _link_charts(token, d["id"], chart_ids)
+                    _link_charts(token, base_url, d["id"], chart_ids)
                     return resp2.json()
                 print(f"  ✗ Update failed: {resp2.status_code}")
                 return None
 
     # Create new dashboard
     resp = requests.post(
-        urljoin(SUPERSET_URL, "/api/v1/dashboard/"),
+        urljoin(base_url, "/api/v1/dashboard/"),
         headers=headers(token),
         json=payload,
         timeout=30,
@@ -207,20 +216,20 @@ def create_dashboard(token, chart_ids, title, slug):
     if resp.status_code == 201:
         result = resp.json()
         print(f"  ✓ Dashboard '{title}' (ID={result['id']})")
-        _link_charts(token, result["id"], chart_ids)
+        _link_charts(token, base_url, result["id"], chart_ids)
         return result
     else:
         print(f"  ✗ Dashboard create failed: {resp.status_code} {resp.text[:200]}")
         return None
 
 
-def _link_charts(token, dash_id, chart_ids):
+def _link_charts(token, base_url, dash_id, chart_ids):
     """Link charts to dashboard via dashboard_slices through the API."""
     for c in chart_ids:
         try:
             # Get current chart's dashboards
             resp = requests.get(
-                urljoin(SUPERSET_URL, f"/api/v1/chart/{c['id']}"),
+                urljoin(base_url, f"/api/v1/chart/{c['id']}"),
                 headers=headers(token),
                 timeout=10,
             )
@@ -231,7 +240,7 @@ def _link_charts(token, dash_id, chart_ids):
                 if dash_id not in dash_ids:
                     dash_ids.append(dash_id)
                 update_resp = requests.put(
-                    urljoin(SUPERSET_URL, f"/api/v1/chart/{c['id']}"),
+                    urljoin(base_url, f"/api/v1/chart/{c['id']}"),
                     headers=headers(token),
                     json={"dashboards": dash_ids},
                     timeout=10,
@@ -253,6 +262,10 @@ def main():
     token = get_token(args.superset_url, args.username, args.password)
     print("✓ Authenticated\n")
 
+    # Discover grocery DB ID
+    grocery_db_id = find_grocery_db_id(token, args.superset_url)
+    print(f"Grocery DB ID: {grocery_db_id}\n")
+
     # ── Step 1: Register unused datasets ─────────────────────────────────────
     print("--- Step 1: Register Datasets ---")
     new_tables = [
@@ -269,13 +282,13 @@ def main():
 
     ds = {}
     for table in new_tables:
-        ds_id = register_dataset(token, table)
+        ds_id = register_dataset(token, args.superset_url, grocery_db_id, table)
         if ds_id:
             ds[table] = ds_id
 
     # Also fetch existing IDs for tables we'll build charts on
     list_resp = requests.get(
-        urljoin(SUPERSET_URL, "/api/v1/dataset/"),
+        urljoin(args.superset_url, "/api/v1/dataset/"),
         headers=headers(token),
         params={"page": 0, "page_size": 100},
         timeout=10,
@@ -301,7 +314,7 @@ def main():
     }
     for table, col in date_map.items():
         if table in ds and ds[table]:
-            set_main_dttm(token, ds[table], col)
+            set_main_dttm(token, args.superset_url, ds[table], col)
     print()
 
     # ── Step 3: Create charts ────────────────────────────────────────────────
@@ -404,7 +417,7 @@ def main():
     for sec in hr_sections:
         ds_id = ds.get(sec["key"])
         if ds_id:
-            c = create_chart(token, ds_id, sec["name"], sec["viz"], sec["params"])
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
             if c:
                 hr_charts.append(c)
 
@@ -477,7 +490,7 @@ def main():
     for sec in shrink_sections:
         ds_id = ds.get(sec["key"])
         if ds_id:
-            c = create_chart(token, ds_id, sec["name"], sec["viz"], sec["params"])
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
             if c:
                 shrink_charts.append(c)
 
@@ -528,7 +541,7 @@ def main():
     for sec in supply_sections:
         ds_id = ds.get(sec["key"])
         if ds_id:
-            c = create_chart(token, ds_id, sec["name"], sec["viz"], sec["params"])
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
             if c:
                 supply_charts.append(c)
 
@@ -538,11 +551,11 @@ def main():
     print("--- Step 4: Create Dashboards ---")
 
     if hr_charts:
-        create_dashboard(token, hr_charts, "HR & Labor", "hr-labor")
+        create_dashboard(token, args.superset_url, hr_charts, "HR & Labor", "hr-labor")
     if shrink_charts:
-        create_dashboard(token, shrink_charts, "Shrink & Promotions", "shrink-promotions")
+        create_dashboard(token, args.superset_url, shrink_charts, "Shrink & Promotions", "shrink-promotions")
     if supply_charts:
-        create_dashboard(token, supply_charts, "Supply Chain", "supply-chain")
+        create_dashboard(token, args.superset_url, supply_charts, "Supply Chain", "supply-chain")
 
     print("\n=== Done ===")
     print(f"\nSummary:")
