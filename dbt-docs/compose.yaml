@@ -1,10 +1,11 @@
 # dbt Docs — Data catalog and lineage for dbt-managed models
 # 260426 - initial setup: replaces OpenMetadata for lightweight discoverability
+# 260713 - custom Dockerfile to match airflow-worker dbt version (1.11.12)
 
 services:
   dbt-docs:
     container_name: dbt-docs
-    image: ghcr.io/dbt-labs/dbt-postgres:latest
+    build: .
     environment:
       TZ: ${TZ}
       POSTGRES_HOST: postgres
