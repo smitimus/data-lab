@@ -10,7 +10,7 @@ renamed as (
         event_type,
         event_dt::timestamptz                   as event_dt,
         event_dt::date                          as event_date,
-        event_dt::time                          as event_time,
+        (event_dt::timestamptz)::time           as event_time,
         notes,
         _sdc_extracted_at                       as _extracted_at
     from source
