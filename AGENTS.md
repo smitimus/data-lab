@@ -30,6 +30,10 @@ bash setup.sh   # first-time only: adopt stacks in Dockhand
 
 **Start order**: dockhand → homepage → postgres (wait 30s) → verisim-grocery → airflow → superset → cloudbeaver → dbt-docs
 
+**Fresh deploy** (repo already cloned): `bash init.sh && bash start.sh` then `bash setup.sh` (first-time only: adopt stacks in Dockhand).
+
+**install.sh** uses `exec </dev/tty>` for interactive prompts — for non-interactive installs pipe a blank line: `echo '' | bash /tmp/install.sh`
+
 ## Installer Tokens (`fill_env()` in install.sh)
 
 | Token | Replaced with |
@@ -237,6 +241,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v Exited
 |---------|------------|-----|
 | Pipeline DAG fails on ingest | Is verisim-grocery running? | `docker ps | grep verisim-grocery` |
 | Pipeline DAG fails on dbt | Is postgres EDW accessible? | `docker exec postgres psql -U postgres -d grocery -c "SELECT 1"` |
+| Airflow DB migration hangs | First start, container exited | `docker compose -f /opt/data-lab/airflow/compose.yaml restart` |
 | Superset shows no data | Has the pipeline run successfully? | Check mart tables: `docker exec postgres psql -U postgres -d grocery -c "SELECT COUNT(*) FROM mart.mart_daily_revenue"` |
 | Container won't start | Port conflict? | `ss -tlnp | grep <port>` |
 | dbt test fails | Schema mismatch? | Re-run ingest first, then dbt |
