@@ -1,0 +1,53 @@
+# Semantic model: transport_load_summary
+
+semantic_models:
+- name: transport_load_summary
+  model: ref('mart_transport_load_summary')
+  entities:
+  - name: transport_load_summary
+    type: primary
+    expr: load_id
+  - name: truck
+    type: foreign
+    expr: truck_id
+  - name: warehouse
+    type: foreign
+    expr: warehouse_location_id
+  - name: store
+    type: foreign
+    expr: store_location_id
+  measures:
+  - name: transport_load_summary_hours_in_transit
+    agg: average
+    agg_time_dimension: load_date
+  - name: has_departed
+    agg: sum
+    expr: case when has_departed then 1 else 0 end
+    agg_time_dimension: load_date
+  - name: has_arrived
+    agg: sum
+    expr: case when has_arrived then 1 else 0 end
+    agg_time_dimension: load_date
+  - name: is_on_time
+    agg: sum
+    expr: case when is_on_time then 1 else 0 end
+    agg_time_dimension: load_date
+  dimensions:
+  - name: load_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: status
+    type: categorical
+  - name: truck_id
+    type: categorical
+  - name: license_plate
+    type: categorical
+  - name: truck_model
+    type: categorical
+  - name: driver
+    type: categorical
+  - name: warehouse_name
+    type: categorical
+  - name: store_name
+    type: categorical

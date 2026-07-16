@@ -1,0 +1,44 @@
+# Metrics file
+
+metrics:
+- name: fulfillment_volume
+  label: Fulfillment Volume
+  description: Total number of fulfillment orders
+  type: simple
+  type_params:
+    measure: daily_fulfillment_summary_total_orders
+- name: completed_fulfillments
+  label: Completed Fulfillments
+  type: simple
+  type_params:
+    measure: completed_orders
+- name: cancelled_fulfillments
+  label: Cancelled Fulfillments
+  type: simple
+  type_params:
+    measure: cancelled_orders
+- name: total_qty_requested
+  label: Total Quantity Requested
+  type: simple
+  type_params:
+    measure: daily_fulfillment_summary_total_qty_requested
+- name: total_qty_picked
+  label: Total Quantity Picked
+  type: simple
+  type_params:
+    measure: daily_fulfillment_summary_total_qty_picked
+- name: shorted_lines
+  label: Shorted Lines
+  type: simple
+  type_params:
+    measure: shorted_lines
+- name: avg_fulfillment_cycle_time
+  label: Avg Fulfillment Cycle Time (hours)
+  type: simple
+  type_params:
+    measure: fulfillment_operations_hours_to_fulfill
+- name: delivered_orders
+  label: Delivered Orders
+  type: simple
+  type_params:
+    measure: delivered_count

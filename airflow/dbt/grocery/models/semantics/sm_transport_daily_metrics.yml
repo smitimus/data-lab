@@ -1,0 +1,41 @@
+# Semantic model: transport_daily_metrics
+
+semantic_models:
+- name: transport_daily_metrics
+  model: ref('mart_transport_daily_metrics')
+  entities:
+  - name: transport_daily_metrics
+    type: primary
+    expr: warehouse_location_id
+  measures:
+  - name: transport_daily_metrics_total_loads
+    agg: sum
+    agg_time_dimension: load_date
+  - name: completed_loads
+    agg: sum
+    agg_time_dimension: load_date
+  - name: cancelled_loads
+    agg: sum
+    agg_time_dimension: load_date
+  - name: pending_loads
+    agg: sum
+    agg_time_dimension: load_date
+  - name: on_time_loads
+    agg: sum
+    agg_time_dimension: load_date
+  - name: active_trucks
+    agg: sum
+    agg_time_dimension: load_date
+  - name: avg_transit_hours
+    agg: average
+    agg_time_dimension: load_date
+  - name: total_transit_hours
+    agg: sum
+    agg_time_dimension: load_date
+  dimensions:
+  - name: load_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: warehouse_name
+    type: categorical

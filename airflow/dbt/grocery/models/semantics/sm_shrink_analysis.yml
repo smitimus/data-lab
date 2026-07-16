@@ -1,0 +1,39 @@
+# Semantic model: shrink_analysis
+
+semantic_models:
+- name: shrink_analysis
+  model: ref('mart_shrink_analysis')
+  entities:
+  - name: shrink_analysis
+    type: primary
+    expr: location_id
+  - name: product
+    type: foreign
+    expr: product_id
+  measures:
+  - name: event_count
+    agg: sum
+    agg_time_dimension: event_date
+  - name: total_quantity_lost
+    agg: sum
+    agg_time_dimension: event_date
+  - name: shrink_analysis_total_value_lost
+    agg: sum
+    agg_time_dimension: event_date
+  dimensions:
+  - name: event_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical
+  - name: product_name
+    type: categorical
+  - name: category
+    type: categorical
+  - name: shrinkage_type
+    type: categorical

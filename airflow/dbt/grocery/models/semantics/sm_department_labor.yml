@@ -1,0 +1,50 @@
+# Semantic model: department_labor
+
+semantic_models:
+- name: department_labor
+  model: ref('mart_department_labor')
+  entities:
+  - name: department_labor
+    type: primary
+    expr: location_id
+  measures:
+  - name: total_shifts
+    agg: sum
+    agg_time_dimension: report_date
+  - name: completed_shifts
+    agg: sum
+    agg_time_dimension: report_date
+  - name: no_show_shifts
+    agg: sum
+    agg_time_dimension: report_date
+  - name: called_out_shifts
+    agg: sum
+    agg_time_dimension: report_date
+  - name: department_labor_scheduled_hours
+    agg: sum
+    agg_time_dimension: report_date
+  - name: actual_hours
+    agg: sum
+    agg_time_dimension: report_date
+  - name: scheduled_cost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: actual_cost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: cost_variance
+    agg: sum
+    agg_time_dimension: report_date
+  dimensions:
+  - name: report_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: department
+    type: categorical
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical

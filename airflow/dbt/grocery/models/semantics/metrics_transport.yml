@@ -1,0 +1,28 @@
+# Metrics file
+
+metrics:
+- name: total_transport_loads
+  label: Total Transport Loads
+  type: simple
+  type_params:
+    measure: transport_daily_metrics_total_loads
+- name: completed_transport_loads
+  label: Completed Transport Loads
+  type: simple
+  type_params:
+    measure: completed_loads
+- name: on_time_loads
+  label: On-Time Loads
+  type: simple
+  type_params:
+    measure: on_time_loads
+- name: avg_transit_hours
+  label: Average Transit Hours
+  type: simple
+  type_params:
+    measure: avg_transit_hours
+- name: active_trucks_count
+  label: Active Trucks
+  type: simple
+  type_params:
+    measure: active_trucks

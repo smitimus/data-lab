@@ -1,0 +1,44 @@
+# Semantic model: daily_revenue
+
+semantic_models:
+- name: daily_revenue
+  model: ref('mart_daily_revenue')
+  entities:
+  - name: daily_revenue
+    type: primary
+    expr: location_id
+  measures:
+  - name: pos_transaction_count
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: pos_revenue
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: daily_revenue_total_revenue
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: loyalty_transactions
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: coupon_savings_total
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: deal_savings_total
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: total_discount_savings
+    agg: sum
+    agg_time_dimension: transaction_date
+  dimensions:
+  - name: transaction_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical
+  - name: location_type
+    type: categorical

@@ -1,0 +1,35 @@
+# Semantic model: supply_chain_summary
+
+semantic_models:
+- name: supply_chain_summary
+  model: ref('mart_supply_chain_summary')
+  entities:
+  - name: supply_chain_summary
+    type: primary
+    expr: order_id
+  - name: warehouse
+    type: foreign
+    expr: warehouse_location_id
+  - name: store
+    type: foreign
+    expr: store_location_id
+  measures:
+  - name: supply_chain_summary_hours_to_fulfill
+    agg: average
+    agg_time_dimension: order_date
+  - name: supply_chain_summary_hours_in_transit
+    agg: average
+    agg_time_dimension: order_date
+  dimensions:
+  - name: order_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: order_status
+    type: categorical
+  - name: fulfillment_status
+    type: categorical
+  - name: load_status
+    type: categorical
+  - name: store_name
+    type: categorical

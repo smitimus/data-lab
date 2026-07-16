@@ -1,0 +1,19 @@
+# Semantic model: location_performance
+
+semantic_models:
+- name: location_performance
+  model: ref('mart_location_performance')
+  entities:
+  - name: location_performance
+    type: primary
+    expr: location_id
+  measures: []
+  dimensions:
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical
+  - name: location_type
+    type: categorical

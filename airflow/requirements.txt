@@ -1,6 +1,7 @@
 # dbt packages
 dbt-core
 dbt-postgres
+dbt-metricflow
 
 # Airflow and data engineering packages
 psycopg2-binary
@@ -12,6 +13,5 @@ flower
 # If needed, check compatibility and install separately
 # airflow-dbt
 
-# Note: Do NOT include apache-airflow here - it's already in the base image
+# Note: Do NOT include apache-airflow here - it is already in the base image
 # Including it would cause version conflicts
-

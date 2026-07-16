@@ -1,0 +1,49 @@
+# Metrics file
+
+metrics:
+- name: total_labor_cost
+  label: Total Labor Cost
+  description: Actual labor cost incurred
+  type: simple
+  type_params:
+    measure: actual_cost
+- name: total_scheduled_labor_cost
+  label: Total Scheduled Labor Cost
+  type: simple
+  type_params:
+    measure: scheduled_cost
+- name: total_hours_worked
+  label: Total Hours Worked
+  type: simple
+  type_params:
+    measure: employee_hours_vs_schedule_net_hours_worked
+- name: total_scheduled_hours
+  label: Total Scheduled Hours
+  type: simple
+  type_params:
+    measure: employee_hours_vs_schedule_scheduled_hours
+- name: employees_present
+  label: Employees Present
+  type: simple
+  type_params:
+    measure: employees_present
+- name: total_shifts
+  label: Total Shifts
+  type: simple
+  type_params:
+    measure: total_shifts
+- name: completed_shifts
+  label: Completed Shifts
+  type: simple
+  type_params:
+    measure: completed_shifts
+- name: no_show_shifts
+  label: No-Show Shifts
+  type: simple
+  type_params:
+    measure: no_show_shifts
+- name: revenue_processed
+  label: Revenue Processed by Employees
+  type: simple
+  type_params:
+    measure: total_revenue_processed

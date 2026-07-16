@@ -1,0 +1,46 @@
+# Semantic model: order_fulfillment_funnel
+
+semantic_models:
+- name: order_fulfillment_funnel
+  model: ref('mart_order_fulfillment_funnel')
+  entities:
+  - name: order_fulfillment_funnel
+    type: primary
+    expr: order_id
+  - name: warehouse
+    type: foreign
+    expr: warehouse_location_id
+  - name: store
+    type: foreign
+    expr: store_location_id
+  measures:
+  - name: order_line_items
+    agg: sum
+    agg_time_dimension: order_date
+  - name: total_qty_ordered
+    agg: sum
+    agg_time_dimension: order_date
+  - name: total_qty_approved
+    agg: sum
+    agg_time_dimension: order_date
+  - name: days_order_to_fulfill
+    agg: average
+    agg_time_dimension: order_date
+  - name: days_order_to_delivery
+    agg: average
+    agg_time_dimension: order_date
+  dimensions:
+  - name: order_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: order_status
+    type: categorical
+  - name: fulfillment_status
+    type: categorical
+  - name: load_status
+    type: categorical
+  - name: pipeline_stage
+    type: categorical
+  - name: store_name
+    type: categorical

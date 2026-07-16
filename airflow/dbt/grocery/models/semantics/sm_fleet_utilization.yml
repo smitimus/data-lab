@@ -1,0 +1,15 @@
+# Semantic model: fleet_utilization
+
+semantic_models:
+- name: fleet_utilization
+  model: ref('mart_fleet_utilization')
+  entities:
+  - name: fleet_utilization
+    type: primary
+    expr: truck_id
+  measures: []
+  dimensions:
+  - name: license_plate
+    type: categorical
+  - name: utilization_status
+    type: categorical

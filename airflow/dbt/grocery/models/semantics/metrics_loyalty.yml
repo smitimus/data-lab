@@ -1,0 +1,58 @@
+# Metrics file
+# Simple metrics are active. Ratio/derived/cumulative/conversion metrics
+# are commented out pending simple metric wrapper additions.
+
+metrics:
+  - name: total_members
+    label: Total Loyalty Members
+    type: simple
+    type_params:
+      measure: member_count
+  - name: total_lifetime_spend
+    label: Total Lifetime Spend
+    description: Total spend across all loyalty members
+    type: simple
+    type_params:
+      measure: total_spend
+  - name: total_points_balance
+    label: Total Points Balance
+    type: simple
+    type_params:
+      measure: points_balance
+  - name: total_lifetime_points_earned
+    label: Total Lifetime Points Earned
+    type: simple
+    type_params:
+      measure: lifetime_points_earned
+  - name: loyalty_transactions
+    label: Loyalty Transactions
+    type: simple
+    type_params:
+      measure: total_transactions
+
+  # --- Complex metrics (pending simple metric wrappers) ---
+  # - name: avg_lifetime_value
+  #   label: Average Lifetime Value
+  #   description: Average total spend per loyalty member
+  #   type: ratio
+  #   type_params:
+  #     numerator: total_spend
+  #     denominator: member_count
+  # - name: avg_points_per_member
+  #   label: Average Points per Member
+  #   type: ratio
+  #   type_params:
+  #     numerator: points_balance
+  #     denominator: member_count
+  # - name: avg_loyalty_transaction_value
+  #   label: Avg Loyalty Transaction Value
+  #   type: ratio
+  #   type_params:
+  #     numerator: total_spend
+  #     denominator: total_transactions
+  # - name: loyalty_spend_per_transaction
+  #   label: Loyalty Spend per Transaction
+  #   type: ratio
+  #   type_params:
+  #     numerator: total_spend
+  #     denominator: total_transactions

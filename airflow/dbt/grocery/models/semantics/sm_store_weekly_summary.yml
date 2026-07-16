@@ -1,0 +1,57 @@
+# Semantic model: store_weekly_summary
+
+semantic_models:
+- name: store_weekly_summary
+  model: ref('mart_store_weekly_summary')
+  entities:
+  - name: store_weekly_summary
+    type: primary
+    expr: location_id
+  measures:
+  - name: store_weekly_summary_transaction_count
+    agg: sum
+    agg_time_dimension: week_start
+  - name: store_weekly_summary_total_revenue
+    agg: sum
+    agg_time_dimension: week_start
+  - name: loyalty_transaction_count
+    agg: sum
+    agg_time_dimension: week_start
+  - name: store_weekly_summary_shrink_event_count
+    agg: sum
+    agg_time_dimension: week_start
+  - name: shrink_qty_lost
+    agg: sum
+    agg_time_dimension: week_start
+  - name: shrink_value_lost
+    agg: sum
+    agg_time_dimension: week_start
+  - name: below_reorder_count
+    agg: sum
+    agg_time_dimension: week_start
+  - name: out_of_stock_count
+    agg: sum
+    agg_time_dimension: week_start
+  - name: orders_placed
+    agg: sum
+    agg_time_dimension: week_start
+  - name: orders_delivered
+    agg: sum
+    agg_time_dimension: week_start
+  - name: total_labor_hours
+    agg: sum
+    agg_time_dimension: week_start
+  - name: total_labor_cost
+    agg: sum
+    agg_time_dimension: week_start
+  dimensions:
+  - name: week_start
+    type: time
+    type_params:
+      time_granularity: week
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical

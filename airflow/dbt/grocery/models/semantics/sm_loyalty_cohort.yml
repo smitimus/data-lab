@@ -1,0 +1,49 @@
+# Semantic model: loyalty_cohort
+
+semantic_models:
+- name: loyalty_cohort
+  model: ref('mart_loyalty_cohort')
+  entities:
+  - name: loyalty_cohort
+    type: primary
+    expr: member_id
+  measures:
+  - name: points_balance
+    agg: sum
+    agg_time_dimension: signup_date
+  - name: total_spend
+    agg: sum
+    agg_time_dimension: signup_date
+  - name: total_transactions
+    agg: sum
+    agg_time_dimension: signup_date
+  - name: lifetime_points_earned
+    agg: sum
+    agg_time_dimension: signup_date
+  - name: tier_upgrades
+    agg: sum
+    agg_time_dimension: signup_date
+  - name: member_count
+    agg: count
+    expr: member_id
+    agg_time_dimension: signup_date
+  - name: avg_transaction_value
+    agg: average
+    agg_time_dimension: signup_date
+  dimensions:
+  - name: loyalty_tier
+    type: categorical
+  - name: first_name
+    type: categorical
+  - name: last_name
+    type: categorical
+  - name: email
+    type: categorical
+  - name: signup_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: first_purchase_date
+    type: time
+    type_params:
+      time_granularity: day

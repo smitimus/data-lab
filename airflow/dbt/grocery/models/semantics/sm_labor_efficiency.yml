@@ -1,0 +1,35 @@
+# Semantic model: labor_efficiency
+
+semantic_models:
+- name: labor_efficiency
+  model: ref('mart_labor_efficiency')
+  entities:
+  - name: labor_efficiency
+    type: primary
+    expr: location_id
+  measures:
+  - name: labor_efficiency_shifts_scheduled
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: labor_efficiency_shifts_completed
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: shifts_called_out
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: labor_efficiency_shifts_no_show
+    agg: sum
+    agg_time_dimension: scheduled_date
+  dimensions:
+  - name: scheduled_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: department
+    type: categorical
+  - name: location_name
+    type: categorical
+  - name: city
+    type: categorical
+  - name: state
+    type: categorical

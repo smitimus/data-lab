@@ -1,0 +1,15 @@
+# Semantic model: fulfillment_pick_accuracy
+
+semantic_models:
+- name: fulfillment_pick_accuracy
+  model: ref('mart_fulfillment_pick_accuracy')
+  entities:
+  - name: fulfillment_pick_accuracy
+    type: primary
+    expr: fulfillment_id
+  measures: []
+  dimensions:
+  - name: picker_name
+    type: categorical
+  - name: fulfillment_status
+    type: categorical

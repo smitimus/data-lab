@@ -1,0 +1,49 @@
+# Semantic model: department_shrinkage
+
+semantic_models:
+- name: department_shrinkage
+  model: ref('mart_department_shrinkage')
+  entities:
+  - name: department_shrinkage
+    type: primary
+    expr: location_id
+  - name: dept
+    type: foreign
+    expr: department_id
+  measures:
+  - name: department_shrinkage_net_revenue
+    agg: sum
+    agg_time_dimension: report_date
+  - name: department_shrinkage_units_sold
+    agg: sum
+    agg_time_dimension: report_date
+  - name: department_shrinkage_shrink_event_count
+    agg: sum
+    agg_time_dimension: report_date
+  - name: total_qty_lost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: department_shrinkage_total_value_lost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: expired_value_lost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: spoilage_value_lost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: damaged_value_lost
+    agg: sum
+    agg_time_dimension: report_date
+  - name: theft_value_lost
+    agg: sum
+    agg_time_dimension: report_date
+  dimensions:
+  - name: report_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: location_name
+    type: categorical
+  - name: department_name
+    type: categorical

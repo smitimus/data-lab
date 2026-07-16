@@ -1,0 +1,44 @@
+# Semantic model: daily_fulfillment_summary
+
+semantic_models:
+- name: daily_fulfillment_summary
+  model: ref('mart_daily_fulfillment_summary')
+  entities:
+  - name: daily_fulfillment_summary
+    type: primary
+    expr: warehouse_location_id
+  measures:
+  - name: daily_fulfillment_summary_total_orders
+    agg: sum
+    agg_time_dimension: report_date
+  - name: completed_orders
+    agg: sum
+    agg_time_dimension: report_date
+  - name: cancelled_orders
+    agg: sum
+    agg_time_dimension: report_date
+  - name: total_items_picked
+    agg: sum
+    agg_time_dimension: report_date
+  - name: fully_picked_lines
+    agg: sum
+    agg_time_dimension: report_date
+  - name: shorted_lines
+    agg: sum
+    agg_time_dimension: report_date
+  - name: daily_fulfillment_summary_total_qty_requested
+    agg: sum
+    agg_time_dimension: report_date
+  - name: daily_fulfillment_summary_total_qty_picked
+    agg: sum
+    agg_time_dimension: report_date
+  - name: daily_fulfillment_summary_avg_hours_to_fulfill
+    agg: average
+    agg_time_dimension: report_date
+  dimensions:
+  - name: report_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: warehouse_name
+    type: categorical

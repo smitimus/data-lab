@@ -1,0 +1,65 @@
+# Metrics file
+
+metrics:
+- name: total_revenue
+  label: Total Revenue
+  description: Total revenue from all POS transactions
+  type: simple
+  type_params:
+    measure: daily_revenue_total_revenue
+- name: pos_revenue
+  label: POS Revenue (excl. loyalty)
+  description: Revenue from POS transactions before loyalty adjustments
+  type: simple
+  type_params:
+    measure: pos_revenue
+- name: total_transactions
+  label: Total Transactions
+  description: Count of POS transactions
+  type: simple
+  type_params:
+    measure: pos_transaction_count
+- name: total_units_sold
+  label: Total Units Sold
+  type: simple
+  type_params:
+    measure: product_performance_units_sold
+- name: gross_revenue
+  label: Gross Revenue
+  description: Revenue before discounts
+  type: simple
+  type_params:
+    measure: product_performance_gross_revenue
+- name: net_revenue
+  label: Net Revenue
+  description: Revenue after discounts
+  type: simple
+  type_params:
+    measure: product_performance_net_revenue
+- name: gross_profit
+  label: Gross Profit
+  description: Net revenue minus cost of goods sold
+  type: simple
+  type_params:
+    measure: gross_profit
+- name: total_discount_savings
+  label: Total Discount Savings
+  description: Coupon + deal savings passed to customers
+  type: simple
+  type_params:
+    measure: total_discount_savings
+- name: coupon_savings
+  label: Coupon Savings
+  type: simple
+  type_params:
+    measure: coupon_savings_total
+- name: deal_savings
+  label: Deal Savings
+  type: simple
+  type_params:
+    measure: deal_savings_total
+- name: total_cost
+  label: Total Cost of Goods Sold
+  type: simple
+  type_params:
+    measure: total_cost

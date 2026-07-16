@@ -1,0 +1,31 @@
+# Semantic model: attendance_summary
+
+semantic_models:
+- name: attendance_summary
+  model: ref('mart_attendance_summary')
+  entities:
+  - name: attendance_summary
+    type: primary
+    expr: employee_id
+  - name: location
+    type: foreign
+    expr: location_id
+  measures:
+  - name: attendance_summary_total_clocked_hours
+    agg: sum
+    agg_time_dimension: event_date
+  - name: attendance_summary_total_break_hours
+    agg: sum
+    agg_time_dimension: event_date
+  - name: attendance_summary_net_hours_worked
+    agg: sum
+    agg_time_dimension: event_date
+  - name: complete_pairs
+    agg: sum
+    expr: case when has_complete_pair then 1 else 0 end
+    agg_time_dimension: event_date
+  dimensions:
+  - name: event_date
+    type: time
+    type_params:
+      time_granularity: day

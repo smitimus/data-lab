@@ -1,0 +1,38 @@
+# Semantic model: inventory_turnover
+
+semantic_models:
+- name: inventory_turnover
+  model: ref('mart_inventory_turnover')
+  entities:
+  - name: inventory_turnover
+    type: primary
+    expr: location_id
+  - name: product
+    type: foreign
+    expr: product_id
+  measures:
+  - name: inventory_turnover_quantity_on_hand
+    agg: sum
+    agg_time_dimension: last_updated
+  - name: inventory_turnover_quantity_available
+    agg: sum
+    agg_time_dimension: last_updated
+  - name: units_sold_30d
+    agg: sum
+    agg_time_dimension: last_updated
+  - name: estimated_annual_turnover
+    agg: sum
+    agg_time_dimension: last_updated
+  dimensions:
+  - name: product_name
+    type: categorical
+  - name: category
+    type: categorical
+  - name: location_name
+    type: categorical
+  - name: stock_aging_category
+    type: categorical
+  - name: last_updated
+    type: time
+    type_params:
+      time_granularity: day

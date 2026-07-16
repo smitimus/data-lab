@@ -1,0 +1,37 @@
+# Semantic model: inventory_summary
+
+semantic_models:
+- name: inventory_summary
+  model: ref('mart_inventory_summary')
+  entities:
+  - name: inventory_summary
+    type: primary
+    expr: stock_id
+  - name: location
+    type: foreign
+    expr: location_id
+  - name: product
+    type: foreign
+    expr: product_id
+  measures:
+  - name: inventory_summary_quantity_on_hand
+    agg: sum
+    agg_time_dimension: last_updated
+  - name: inventory_summary_quantity_available
+    agg: sum
+    agg_time_dimension: last_updated
+  dimensions:
+  - name: product_name
+    type: categorical
+  - name: category
+    type: categorical
+  - name: sku
+    type: categorical
+  - name: location_name
+    type: categorical
+  - name: is_below_reorder
+    type: categorical
+  - name: last_updated
+    type: time
+    type_params:
+      time_granularity: day

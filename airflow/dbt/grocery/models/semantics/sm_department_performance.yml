@@ -1,0 +1,37 @@
+# Semantic model: department_performance
+
+semantic_models:
+- name: department_performance
+  model: ref('mart_department_performance')
+  entities:
+  - name: department_performance
+    type: primary
+    expr: location_id
+  - name: dept
+    type: foreign
+    expr: department_id
+  measures:
+  - name: department_performance_transaction_count
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: department_performance_units_sold
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: department_performance_gross_revenue
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: department_performance_total_discounts
+    agg: sum
+    agg_time_dimension: transaction_date
+  - name: department_performance_net_revenue
+    agg: sum
+    agg_time_dimension: transaction_date
+  dimensions:
+  - name: transaction_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: location_name
+    type: categorical
+  - name: department_name
+    type: categorical

@@ -1,0 +1,32 @@
+# Semantic model: promotion_effectiveness
+
+semantic_models:
+- name: promotion_effectiveness
+  model: ref('mart_promotion_effectiveness')
+  entities:
+  - name: promotion_effectiveness
+    type: primary
+    expr: product_id
+  measures:
+  - name: days_active
+    agg: sum
+    agg_time_dimension: ad_week_start
+  - name: total_units_sold
+    agg: sum
+    agg_time_dimension: ad_week_start
+  - name: promotion_effectiveness_total_revenue
+    agg: sum
+    agg_time_dimension: ad_week_start
+  dimensions:
+  - name: ad_week_start
+    type: time
+    type_params:
+      time_granularity: week
+  - name: ad_name
+    type: categorical
+  - name: product_name
+    type: categorical
+  - name: category
+    type: categorical
+  - name: is_ad_item
+    type: categorical

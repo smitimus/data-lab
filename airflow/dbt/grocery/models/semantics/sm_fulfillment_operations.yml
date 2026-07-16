@@ -1,0 +1,42 @@
+# Semantic model: fulfillment_operations
+
+semantic_models:
+- name: fulfillment_operations
+  model: ref('mart_fulfillment_operations')
+  entities:
+  - name: fulfillment_operations
+    type: primary
+    expr: fulfillment_id
+  - name: warehouse
+    type: foreign
+    expr: warehouse_location_id
+  measures:
+  - name: total_items
+    agg: sum
+    agg_time_dimension: order_received_at
+  - name: fulfillment_operations_total_qty_requested
+    agg: sum
+    agg_time_dimension: order_received_at
+  - name: fulfillment_operations_total_qty_picked
+    agg: sum
+    agg_time_dimension: order_received_at
+  - name: shorted_items
+    agg: sum
+    agg_time_dimension: order_received_at
+  - name: fully_picked_items
+    agg: sum
+    agg_time_dimension: order_received_at
+  - name: fulfillment_operations_hours_to_fulfill
+    agg: average
+    agg_time_dimension: order_received_at
+  dimensions:
+  - name: fulfillment_status
+    type: categorical
+  - name: warehouse_name
+    type: categorical
+  - name: picker_name
+    type: categorical
+  - name: order_received_at
+    type: time
+    type_params:
+      time_granularity: day

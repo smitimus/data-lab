@@ -1,0 +1,47 @@
+# Semantic model: employee_cost
+
+semantic_models:
+- name: employee_cost
+  model: ref('mart_employee_cost')
+  entities:
+  - name: employee_cost
+    type: primary
+    expr: employee_id
+  - name: location
+    type: foreign
+    expr: location_id
+  measures:
+  - name: employee_cost_scheduled_hours
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: scheduled_labor_cost
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: actual_hours_worked
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: actual_labor_cost
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: employee_cost_shifts_scheduled
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: employee_cost_shifts_completed
+    agg: sum
+    agg_time_dimension: scheduled_date
+  - name: employee_cost_shifts_no_show
+    agg: sum
+    agg_time_dimension: scheduled_date
+  dimensions:
+  - name: scheduled_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: full_name
+    type: categorical
+  - name: department
+    type: categorical
+  - name: job_title
+    type: categorical
+  - name: location_name
+    type: categorical

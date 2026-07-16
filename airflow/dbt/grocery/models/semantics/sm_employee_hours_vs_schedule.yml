@@ -1,0 +1,35 @@
+# Semantic model: employee_hours_vs_schedule
+
+semantic_models:
+- name: employee_hours_vs_schedule
+  model: ref('mart_employee_hours_vs_schedule')
+  entities:
+  - name: employee_hours_vs_schedule
+    type: primary
+    expr: employee_id
+  - name: location
+    type: foreign
+    expr: location_id
+  measures:
+  - name: employee_hours_vs_schedule_scheduled_hours
+    agg: sum
+    agg_time_dimension: report_date
+  - name: employee_hours_vs_schedule_net_hours_worked
+    agg: sum
+    agg_time_dimension: report_date
+  - name: employee_hours_vs_schedule_estimated_labor_cost
+    agg: sum
+    agg_time_dimension: report_date
+  dimensions:
+  - name: report_date
+    type: time
+    type_params:
+      time_granularity: day
+  - name: full_name
+    type: categorical
+  - name: department
+    type: categorical
+  - name: job_title
+    type: categorical
+  - name: attendance_status
+    type: categorical

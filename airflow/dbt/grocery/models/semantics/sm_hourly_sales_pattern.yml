@@ -1,0 +1,19 @@
+# Semantic model: hourly_sales_pattern
+
+semantic_models:
+- name: hourly_sales_pattern
+  model: ref('mart_hourly_sales_pattern')
+  entities:
+  - name: hourly_sales_pattern
+    type: primary
+    expr: location_id
+  measures: []
+  dimensions:
+  - name: hour_of_day
+    type: categorical
+  - name: day_of_week
+    type: categorical
+  - name: day_name
+    type: categorical
+  - name: location_name
+    type: categorical
