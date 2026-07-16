@@ -3,7 +3,6 @@
 metrics:
 - name: fulfillment_volume
   label: Fulfillment Volume
-  description: Total number of fulfillment orders
   type: simple
   type_params:
     measure: daily_fulfillment_summary_total_orders
@@ -42,3 +41,22 @@ metrics:
   type: simple
   type_params:
     measure: delivered_count
+- name: fill_rate
+  label: Fill Rate %
+  description: Quantity picked as a fraction of quantity requested
+  type: ratio
+  type_params:
+    numerator: total_qty_picked
+    denominator: total_qty_requested
+- name: fulfillment_completion_rate
+  label: Fulfillment Completion Rate
+  type: ratio
+  type_params:
+    numerator: completed_fulfillments
+    denominator: fulfillment_volume
+- name: ytd_fulfillment_volume
+  label: YTD Fulfillment Volume
+  type: cumulative
+  type_params:
+    measure: daily_fulfillment_summary_total_orders
+    grain_to_date: year

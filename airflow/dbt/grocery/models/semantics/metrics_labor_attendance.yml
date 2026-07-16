@@ -3,7 +3,6 @@
 metrics:
 - name: total_labor_cost
   label: Total Labor Cost
-  description: Actual labor cost incurred
   type: simple
   type_params:
     measure: actual_cost
@@ -47,3 +46,37 @@ metrics:
   type: simple
   type_params:
     measure: total_revenue_processed
+- name: attendance_rate
+  label: Attendance Rate
+  description: Completed shifts as a fraction of total shifts
+  type: ratio
+  type_params:
+    numerator: completed_shifts
+    denominator: total_shifts
+- name: no_show_rate
+  label: No-Show Rate
+  description: No-show shifts as a fraction of total shifts
+  type: ratio
+  type_params:
+    numerator: no_show_shifts
+    denominator: total_shifts
+- name: schedule_attainment_rate
+  label: Schedule Attainment Rate
+  description: Hours worked vs. scheduled hours
+  type: ratio
+  type_params:
+    numerator: total_hours_worked
+    denominator: total_scheduled_hours
+- name: labor_cost_variance
+  label: Labor Cost Variance
+  description: Actual vs. scheduled labor cost
+  type: ratio
+  type_params:
+    numerator: total_labor_cost
+    denominator: total_scheduled_labor_cost
+- name: ytd_labor_cost
+  label: Year-to-Date Labor Cost
+  type: cumulative
+  type_params:
+    measure: actual_cost
+    grain_to_date: year

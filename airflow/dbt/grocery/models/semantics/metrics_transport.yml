@@ -26,3 +26,15 @@ metrics:
   type: simple
   type_params:
     measure: active_trucks
+- name: on_time_delivery_pct
+  label: On-Time Delivery %
+  type: ratio
+  type_params:
+    numerator: on_time_loads
+    denominator: completed_transport_loads
+- name: transport_completion_rate
+  label: Transport Completion Rate
+  type: ratio
+  type_params:
+    numerator: completed_transport_loads
+    denominator: total_transport_loads

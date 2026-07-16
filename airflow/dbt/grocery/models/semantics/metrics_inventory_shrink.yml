@@ -3,13 +3,11 @@
 metrics:
 - name: current_stock_on_hand
   label: Current Stock On Hand
-  description: Total units currently in stock across all locations
   type: simple
   type_params:
     measure: inventory_summary_quantity_on_hand
 - name: current_stock_available
   label: Current Stock Available
-  description: Available units (on hand minus reserved)
   type: simple
   type_params:
     measure: inventory_summary_quantity_available
@@ -26,13 +24,11 @@ metrics:
     measure: shrink_analysis_total_value_lost
 - name: shrink_quantity
   label: Shrink Quantity
-  description: Total units lost to shrinkage
   type: simple
   type_params:
     measure: total_quantity_lost
 - name: shrink_events
   label: Shrink Events
-  description: Count of shrinkage events
   type: simple
   type_params:
     measure: event_count
@@ -56,3 +52,9 @@ metrics:
   type: simple
   type_params:
     measure: theft_value_lost
+- name: ytd_shrink_value
+  label: Year-to-Date Shrink Value
+  type: cumulative
+  type_params:
+    measure: shrink_analysis_total_value_lost
+    grain_to_date: year

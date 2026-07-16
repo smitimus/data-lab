@@ -8,7 +8,7 @@ metrics:
   type_params:
     measure: daily_revenue_total_revenue
 - name: pos_revenue
-  label: POS Revenue (excl. loyalty)
+  label: POS Revenue
   description: Revenue from POS transactions before loyalty adjustments
   type: simple
   type_params:
@@ -44,7 +44,6 @@ metrics:
     measure: gross_profit
 - name: total_discount_savings
   label: Total Discount Savings
-  description: Coupon + deal savings passed to customers
   type: simple
   type_params:
     measure: total_discount_savings
@@ -63,3 +62,63 @@ metrics:
   type: simple
   type_params:
     measure: total_cost
+- name: total_discounts
+  label: Total Discounts
+  type: simple
+  type_params:
+    measure: product_performance_total_discounts
+- name: avg_transaction_value
+  label: Average Transaction Value
+  description: Revenue per transaction
+  type: ratio
+  type_params:
+    numerator: total_revenue
+    denominator: total_transactions
+- name: gross_margin_pct
+  label: Gross Margin %
+  description: Gross profit as a percentage of net revenue
+  type: ratio
+  type_params:
+    numerator: gross_profit
+    denominator: net_revenue
+- name: discount_rate_pct
+  label: Discount Rate %
+  description: Total discounts as a percentage of gross revenue
+  type: ratio
+  type_params:
+    numerator: total_discounts
+    denominator: gross_revenue
+- name: revenue_wow_growth
+  label: Revenue WoW Growth
+  description: Week-over-week revenue change
+  type: derived
+  type_params:
+    expr: total_revenue - total_revenue_7d_ago
+    metrics:
+    - name: total_revenue
+      offset_window: 7 days
+      alias: total_revenue_7d_ago
+    - name: total_revenue
+- name: revenue_dod_growth
+  label: Revenue DoD Growth
+  description: Day-over-day revenue change
+  type: derived
+  type_params:
+    expr: total_revenue - total_revenue_1d_ago
+    metrics:
+    - name: total_revenue
+      offset_window: 1 day
+      alias: total_revenue_1d_ago
+    - name: total_revenue
+- name: ytd_revenue
+  label: Year-to-Date Revenue
+  type: cumulative
+  type_params:
+    measure: daily_revenue_total_revenue
+    grain_to_date: year
+- name: mtd_revenue
+  label: Month-to-Date Revenue
+  type: cumulative
+  type_params:
+    measure: daily_revenue_total_revenue
+    grain_to_date: month
