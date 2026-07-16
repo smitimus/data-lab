@@ -16,6 +16,7 @@ semantic_models:
     agg_time_dimension: transaction_date
   - name: daily_revenue_total_revenue
     agg: sum
+    expr: total_revenue
     agg_time_dimension: transaction_date
   - name: loyalty_transactions
     agg: sum

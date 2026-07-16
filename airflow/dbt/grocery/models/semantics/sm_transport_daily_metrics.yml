@@ -11,6 +11,7 @@ semantic_models:
   - name: transport_daily_metrics_total_loads
     agg: sum
     agg_time_dimension: load_date
+    expr: total_loads
   - name: completed_loads
     agg: sum
     agg_time_dimension: load_date

@@ -17,9 +17,11 @@ semantic_models:
   - name: inventory_summary_quantity_on_hand
     agg: sum
     agg_time_dimension: last_updated
+    expr: quantity_on_hand
   - name: inventory_summary_quantity_available
     agg: sum
     agg_time_dimension: last_updated
+    expr: quantity_available
   dimensions:
   - name: product_name
     type: categorical

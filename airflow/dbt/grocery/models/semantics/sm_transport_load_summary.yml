@@ -20,6 +20,7 @@ semantic_models:
   - name: transport_load_summary_hours_in_transit
     agg: average
     agg_time_dimension: load_date
+    expr: hours_in_transit
   - name: has_departed
     agg: sum
     expr: case when has_departed then 1 else 0 end

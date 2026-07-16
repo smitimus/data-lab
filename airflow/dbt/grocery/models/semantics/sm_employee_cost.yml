@@ -14,6 +14,7 @@ semantic_models:
   - name: employee_cost_scheduled_hours
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: scheduled_hours
   - name: scheduled_labor_cost
     agg: sum
     agg_time_dimension: scheduled_date
@@ -26,12 +27,15 @@ semantic_models:
   - name: employee_cost_shifts_scheduled
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_scheduled
   - name: employee_cost_shifts_completed
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_completed
   - name: employee_cost_shifts_no_show
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_no_show
   dimensions:
   - name: scheduled_date
     type: time

@@ -14,12 +14,15 @@ semantic_models:
   - name: employee_hours_vs_schedule_scheduled_hours
     agg: sum
     agg_time_dimension: report_date
+    expr: scheduled_hours
   - name: employee_hours_vs_schedule_net_hours_worked
     agg: sum
     agg_time_dimension: report_date
+    expr: net_hours_worked
   - name: employee_hours_vs_schedule_estimated_labor_cost
     agg: sum
     agg_time_dimension: report_date
+    expr: estimated_labor_cost
   dimensions:
   - name: report_date
     type: time

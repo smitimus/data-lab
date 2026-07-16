@@ -17,6 +17,7 @@ semantic_models:
   - name: promotion_effectiveness_total_revenue
     agg: sum
     agg_time_dimension: ad_week_start
+    expr: total_revenue
   dimensions:
   - name: ad_week_start
     type: time

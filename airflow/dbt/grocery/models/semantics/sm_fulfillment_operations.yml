@@ -17,9 +17,11 @@ semantic_models:
   - name: fulfillment_operations_total_qty_requested
     agg: sum
     agg_time_dimension: order_received_at
+    expr: total_qty_requested
   - name: fulfillment_operations_total_qty_picked
     agg: sum
     agg_time_dimension: order_received_at
+    expr: total_qty_picked
   - name: shorted_items
     agg: sum
     agg_time_dimension: order_received_at
@@ -29,6 +31,7 @@ semantic_models:
   - name: fulfillment_operations_hours_to_fulfill
     agg: average
     agg_time_dimension: order_received_at
+    expr: hours_to_fulfill
   dimensions:
   - name: fulfillment_status
     type: categorical

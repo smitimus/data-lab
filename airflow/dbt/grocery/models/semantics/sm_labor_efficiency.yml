@@ -11,15 +11,18 @@ semantic_models:
   - name: labor_efficiency_shifts_scheduled
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_scheduled
   - name: labor_efficiency_shifts_completed
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_completed
   - name: shifts_called_out
     agg: sum
     agg_time_dimension: scheduled_date
   - name: labor_efficiency_shifts_no_show
     agg: sum
     agg_time_dimension: scheduled_date
+    expr: shifts_no_show
   dimensions:
   - name: scheduled_date
     type: time

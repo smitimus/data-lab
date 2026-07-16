@@ -14,18 +14,22 @@ semantic_models:
   - name: department_shrinkage_net_revenue
     agg: sum
     agg_time_dimension: report_date
+    expr: net_revenue
   - name: department_shrinkage_units_sold
     agg: sum
     agg_time_dimension: report_date
+    expr: units_sold
   - name: department_shrinkage_shrink_event_count
     agg: sum
     agg_time_dimension: report_date
+    expr: shrink_event_count
   - name: total_qty_lost
     agg: sum
     agg_time_dimension: report_date
   - name: department_shrinkage_total_value_lost
     agg: sum
     agg_time_dimension: report_date
+    expr: total_value_lost
   - name: expired_value_lost
     agg: sum
     agg_time_dimension: report_date

@@ -17,9 +17,11 @@ semantic_models:
   - name: supply_chain_summary_hours_to_fulfill
     agg: average
     agg_time_dimension: order_date
+    expr: hours_to_fulfill
   - name: supply_chain_summary_hours_in_transit
     agg: average
     agg_time_dimension: order_date
+    expr: hours_in_transit
   dimensions:
   - name: order_date
     type: time

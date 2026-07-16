@@ -11,12 +11,14 @@ semantic_models:
   - name: delivery_performance_total_orders
     agg: sum
     agg_time_dimension: report_week_start
+    expr: total_orders
   - name: total_fulfillments
     agg: sum
     agg_time_dimension: report_week_start
   - name: delivery_performance_total_loads
     agg: sum
     agg_time_dimension: report_week_start
+    expr: total_loads
   - name: fulfilled_count
     agg: sum
     agg_time_dimension: report_week_start
@@ -29,6 +31,7 @@ semantic_models:
   - name: delivery_performance_avg_hours_to_fulfill
     agg: average
     agg_time_dimension: report_week_start
+    expr: avg_hours_to_fulfill
   - name: avg_hours_in_transit
     agg: average
     agg_time_dimension: report_week_start

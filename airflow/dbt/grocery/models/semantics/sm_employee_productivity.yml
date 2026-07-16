@@ -14,12 +14,14 @@ semantic_models:
   - name: employee_productivity_transaction_count
     agg: sum
     agg_time_dimension: sale_date
+    expr: transaction_count
   - name: total_revenue_processed
     agg: sum
     agg_time_dimension: sale_date
   - name: employee_productivity_estimated_labor_cost
     agg: sum
     agg_time_dimension: sale_date
+    expr: estimated_labor_cost
   dimensions:
   - name: sale_date
     type: time

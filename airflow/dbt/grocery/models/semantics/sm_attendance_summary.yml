@@ -14,12 +14,15 @@ semantic_models:
   - name: attendance_summary_total_clocked_hours
     agg: sum
     agg_time_dimension: event_date
+    expr: total_clocked_hours
   - name: attendance_summary_total_break_hours
     agg: sum
     agg_time_dimension: event_date
+    expr: total_break_hours
   - name: attendance_summary_net_hours_worked
     agg: sum
     agg_time_dimension: event_date
+    expr: net_hours_worked
   - name: complete_pairs
     agg: sum
     expr: case when has_complete_pair then 1 else 0 end

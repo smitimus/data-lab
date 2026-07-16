@@ -14,18 +14,23 @@ semantic_models:
   - name: product_performance_units_sold
     agg: sum
     agg_time_dimension: transaction_date
+    expr: units_sold
   - name: product_performance_gross_revenue
     agg: sum
     agg_time_dimension: transaction_date
+    expr: gross_revenue
   - name: product_performance_total_discounts
     agg: sum
     agg_time_dimension: transaction_date
+    expr: total_discounts
   - name: product_performance_net_revenue
     agg: sum
     agg_time_dimension: transaction_date
+    expr: net_revenue
   - name: product_performance_transaction_count
     agg: sum
     agg_time_dimension: transaction_date
+    expr: transaction_count
   - name: total_cost
     agg: sum
     agg_time_dimension: transaction_date

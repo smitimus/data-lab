@@ -11,6 +11,7 @@ semantic_models:
   - name: daily_fulfillment_summary_total_orders
     agg: sum
     agg_time_dimension: report_date
+    expr: total_orders
   - name: completed_orders
     agg: sum
     agg_time_dimension: report_date
@@ -29,12 +30,15 @@ semantic_models:
   - name: daily_fulfillment_summary_total_qty_requested
     agg: sum
     agg_time_dimension: report_date
+    expr: total_qty_requested
   - name: daily_fulfillment_summary_total_qty_picked
     agg: sum
     agg_time_dimension: report_date
+    expr: total_qty_picked
   - name: daily_fulfillment_summary_avg_hours_to_fulfill
     agg: average
     agg_time_dimension: report_date
+    expr: avg_hours_to_fulfill
   dimensions:
   - name: report_date
     type: time

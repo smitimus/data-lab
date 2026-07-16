@@ -23,6 +23,7 @@ semantic_models:
   - name: department_labor_scheduled_hours
     agg: sum
     agg_time_dimension: report_date
+    expr: scheduled_hours
   - name: actual_hours
     agg: sum
     agg_time_dimension: report_date

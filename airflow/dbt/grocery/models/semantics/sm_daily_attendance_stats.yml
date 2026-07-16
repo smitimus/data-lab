@@ -14,12 +14,14 @@ semantic_models:
   - name: daily_attendance_stats_total_clocked_hours
     agg: sum
     agg_time_dimension: event_date
+    expr: total_clocked_hours
   - name: total_net_hours
     agg: sum
     agg_time_dimension: event_date
   - name: daily_attendance_stats_total_break_hours
     agg: sum
     agg_time_dimension: event_date
+    expr: total_break_hours
   dimensions:
   - name: event_date
     type: time

@@ -11,15 +11,18 @@ semantic_models:
   - name: store_weekly_summary_transaction_count
     agg: sum
     agg_time_dimension: week_start
+    expr: transaction_count
   - name: store_weekly_summary_total_revenue
     agg: sum
     agg_time_dimension: week_start
+    expr: total_revenue
   - name: loyalty_transaction_count
     agg: sum
     agg_time_dimension: week_start
   - name: store_weekly_summary_shrink_event_count
     agg: sum
     agg_time_dimension: week_start
+    expr: shrink_event_count
   - name: shrink_qty_lost
     agg: sum
     agg_time_dimension: week_start
