@@ -284,6 +284,10 @@ def main():
         "mart_product_price_elasticity",
         "mart_promotion_redemption",
         "mart_promotion_effectiveness",
+        # data-lab#27: Inventory & Shrinkage domain
+        "mart_inventory_valuation",
+        "mart_shrinkage_analysis",
+        "mart_inventory_turnover",
     ]
 
     ds = {}
@@ -322,6 +326,10 @@ def main():
         "mart_product_price_elasticity": "sale_month",
         "mart_promotion_redemption": "valid_from",
         "mart_promotion_effectiveness": "ad_week_start",
+        # data-lab#27: Inventory & Shrinkage domain
+        "mart_inventory_valuation": "location_id",
+        "mart_shrinkage_analysis": "event_date",
+        "mart_inventory_turnover": "last_updated",
     }
     for table, col in date_map.items():
         if table in ds and ds[table]:
@@ -649,6 +657,77 @@ def main():
             if c:
                 pos_charts.append(c)
 
+    # ═══ INVENTORY, STOCK & SHRINKAGE DASHBOARD (data-lab#27) ═══════════════
+    inv_charts = []
+    inv_sections = [
+        {
+            "key": "mart_inventory_valuation",
+            "name": "On-Hand Value by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("value_on_hand_cost", "SUM")],
+                "groupby": ["department_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_inventory_valuation",
+            "name": "On-Hand Value by Location",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("value_on_hand_cost", "SUM")],
+                "groupby": ["location_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_shrinkage_analysis",
+            "name": "Shrink Value by Cause",
+            "viz": "pie",
+            "params": {
+                "metrics": [make_metric("total_value_lost", "SUM")],
+                "groupby": ["shrinkage_type"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_shrinkage_analysis",
+            "name": "Shrink Value by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("total_value_lost", "SUM")],
+                "groupby": ["department_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_inventory_turnover",
+            "name": "Stock Aging Distribution",
+            "viz": "pie",
+            "params": {
+                "metrics": [make_metric("product_id", "COUNT_DISTINCT")],
+                "groupby": ["stock_aging_category"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_inventory_turnover",
+            "name": "Estimated Annual Turnover",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("estimated_annual_turnover", "AVG")],
+                "groupby": ["department_name"],
+                "row_limit": 20,
+            },
+        },
+    ]
+    for sec in inv_sections:
+        ds_id = ds.get(sec["key"])
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
+            if c:
+                inv_charts.append(c)
+
     print()
 
     # ── Step 4: Create dashboards ────────────────────────────────────────────
@@ -662,6 +741,8 @@ def main():
         create_dashboard(token, args.superset_url, supply_charts, "Supply Chain", "supply-chain")
     if pos_charts:
         create_dashboard(token, args.superset_url, pos_charts, "Store — Sales, Promotions & Pricing", "store_pos_promotions")
+    if inv_charts:
+        create_dashboard(token, args.superset_url, inv_charts, "Store — Inventory, Stock & Shrinkage", "store_inventory_shrinkage")
 
     print("\n=== Done ===")
     print(f"\nSummary:")
@@ -669,6 +750,7 @@ def main():
     print(f"  Shrink & Promo:    {len(shrink_charts)} charts")
     print(f"  Supply Chain:      {len(supply_charts)} charts")
     print(f"  POS & Promotions:  {len(pos_charts)} charts")
+    print(f"  Inventory & Shrink: {len(inv_charts)} charts")
 
 
 if __name__ == "__main__":

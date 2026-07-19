@@ -12,19 +12,32 @@
 #   refresh_cadence: matches the grocery_dbt DAG schedule
 
 dashboards:
-  - domain: pos_promotions
-    dashboard_slug: store_pos_promotions
-    dashboard_title: "Store — Sales, Promotions & Pricing"
-    kpi_cards:
-      - total_revenue
-      - promo_lift_vs_baseline_pct
-      - avg_basket_size
-      - coupon_redemption_rate
-      - price_elasticity
-    datasets_used:
-      - mart_daily_revenue
-      - mart_category_sales_performance
-      - mart_promotion_effectiveness
-      - mart_promotion_redemption
-      - mart_product_price_elasticity
-    refresh_cadence: "daily (grocery_dbt DAG)"
+- domain: pos_promotions
+  dashboard_slug: store_pos_promotions
+  dashboard_title: Store — Sales, Promotions & Pricing
+  kpi_cards:
+  - total_revenue
+  - promo_lift_vs_baseline_pct
+  - avg_basket_size
+  - coupon_redemption_rate
+  - price_elasticity
+  datasets_used:
+  - mart_daily_revenue
+  - mart_category_sales_performance
+  - mart_promotion_effectiveness
+  - mart_promotion_redemption
+  - mart_product_price_elasticity
+  refresh_cadence: daily (grocery_dbt DAG)
+- domain: inventory_shrinkage
+  dashboard_slug: store_inventory_shrinkage
+  dashboard_title: Store — Inventory, Stock & Shrinkage
+  kpi_cards:
+  - value_on_hand_cost
+  - total_value_lost
+  - estimated_annual_turnover
+  - stock_aging_category
+  datasets_used:
+  - mart_inventory_valuation
+  - mart_shrinkage_analysis
+  - mart_inventory_turnover
+  refresh_cadence: daily (grocery_dbt DAG)

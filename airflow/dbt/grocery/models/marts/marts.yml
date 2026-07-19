@@ -342,25 +342,91 @@ models:
           column_name: shrinkage_type
           value_set: ['damaged', 'expired', 'spoilage', 'theft']
 
-  # ── mart_supply_chain_summary ─────────────────────────────────────────────
-  # Grain: one row per order_id
+  # ── int_inventory_daily_snapshot ──────────────────────────────────────────
+  # Grain: one row per (product_id, location_id, snapshot_date)
 
-  - name: mart_supply_chain_summary
+  - name: int_inventory_daily_snapshot
     columns:
-      - name: order_id
-        tests: [unique, not_null]
-      - name: order_date
+      - name: product_id
         tests: [not_null]
-      - name: store_location_id
+      - name: location_id
         tests: [not_null]
-      - name: order_status
+      - name: snapshot_date
+        tests: [not_null]
+      - name: quantity_on_hand
         tests: [not_null]
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 10
-          max_value: 10000
+          min_value: 100
+          max_value: 1000000
 
-  # ── mart_inventory_turnover ───────────────────────────────────────────────
+  # ── int_shrinkage_attributed ──────────────────────────────────────────────
+  # Grain: one row per shrinkage event (event_id)
+
+  - name: int_shrinkage_attributed
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: product_id
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: event_date
+        tests: [not_null]
+      - name: shrinkage_type
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 300000
+
+  # ── mart_inventory_valuation ──────────────────────────────────────────────
+  # Grain: one row per (location_id, department_id)
+
+  - name: mart_inventory_valuation
+    columns:
+      - name: location_id
+        tests: [not_null]
+      - name: department_id
+        tests: [not_null]
+      - name: value_on_hand_cost
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: value_on_hand_cost
+          min_value: 0
+
+  # ── mart_shrinkage_analysis ───────────────────────────────────────────────
+  # Grain: one row per (event_date, location_id, department_id, category, shrinkage_type)
+  # NOTE: distinct from mart_shrink_analysis (product-level). This is the corrected
+  # department/category/cause rollup using stg_pos_products.department_id.
+
+  - name: mart_shrinkage_analysis
+    columns:
+      - name: event_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: department_id
+        tests: [not_null]
+      - name: category
+        tests: [not_null]
+      - name: shrinkage_type
+        tests: [not_null]
+      - name: total_value_lost
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 300000
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: shrinkage_type
+          value_set: ['damaged', 'expired', 'spoilage', 'theft']
+
+  # ── mart_inventory_turnover (extended with margin context) ────────────────
   # Grain: one row per (product_id, location_id) — store only
 
   - name: mart_inventory_turnover
@@ -382,9 +448,31 @@ models:
           - not_null
           - accepted_values:
               values: ['OUT_OF_STOCK', 'DEAD_STOCK', 'OVERSTOCKED', 'REORDER_NEEDED', 'NO_RECEIPT_HISTORY', 'HEALTHY']
+      - name: unit_cost
+      - name: unit_price
+      - name: margin_pct
+      - name: gross_margin_proxy
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
           min_value: 100
+          max_value: 10000
+
+  # ── mart_supply_chain_summary ─────────────────────────────────────────────
+  # Grain: one row per order_id
+
+  - name: mart_supply_chain_summary
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: order_date
+        tests: [not_null]
+      - name: store_location_id
+        tests: [not_null]
+      - name: order_status
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
           max_value: 10000
 
   # ── mart_hourly_sales_pattern ─────────────────────────────────────────────
