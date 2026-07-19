@@ -602,7 +602,23 @@ def main():
             if c:
                 shrink_charts.append(c)
 
-    # ═══ SUPPLY CHAIN DASHBOARD ══════════════════════════════════════════════
+    # ═══ SUPPLY CHAIN DASHBOARD (data-lab#29) ══════════════════════════════
+    # Register the new #29 marts as datasets and build charts for the dedicated
+    # store_supply_chain dashboard (replacing the legacy supply-chain slug).
+    for t in ("mart_supply_chain_kpis", "mart_order_cycle_time", "mart_order_fulfillment_funnel"):
+        if t not in ds:
+            ds_id = register_dataset(token, args.superset_url, grocery_db_id, t)
+            if ds_id:
+                ds[t] = ds_id
+    sc_date_map = {
+        "mart_supply_chain_kpis": "report_date",
+        "mart_order_cycle_time": "order_date",
+        "mart_order_fulfillment_funnel": "order_date",
+    }
+    for t, col in sc_date_map.items():
+        if t in ds and ds[t]:
+            set_main_dttm(token, args.superset_url, ds[t], col)
+
     supply_charts = []
     supply_sections = [
         {
@@ -643,6 +659,75 @@ def main():
                 "metrics": [make_metric("hours_in_transit", "AVG")],
                 "groupby": ["load_status"],
                 "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_supply_chain_kpis",
+            "name": "Fill Rate %",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("fill_rate_pct", "AVG")],
+                "groupby": ["warehouse_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_supply_chain_kpis",
+            "name": "On-Time Delivery Rate %",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("on_time_rate_pct", "AVG")],
+                "groupby": ["warehouse_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_supply_chain_kpis",
+            "name": "Short Rate %",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("short_rate_pct", "AVG")],
+                "groupby": ["warehouse_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_order_cycle_time",
+            "name": "Avg Order→Fulfillment Hours",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("order_to_fulfill_hours", "AVG")],
+                "groupby": ["warehouse_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_order_cycle_time",
+            "name": "Avg Order→Delivery Hours",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("total_order_to_delivery_hours", "AVG")],
+                "groupby": ["store_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_fulfillment_pick_accuracy",
+            "name": "Pick Accuracy (Fill Rate %)",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("total_fill_rate_pct", "AVG")],
+                "groupby": ["warehouse_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_order_fulfillment_funnel",
+            "name": "SLA Breaches (Late Deliveries)",
+            "viz": "big_number_total",
+            "params": {
+                "metric": make_metric("days_late", "AVG", label="Avg Days Late (SLA Breach)"),
+                "subheader": "Avg Days Late on Breached Orders",
             },
         },
     ]
@@ -828,7 +913,7 @@ def main():
     if shrink_charts:
         create_dashboard(token, args.superset_url, shrink_charts, "Shrink & Promotions", "shrink-promotions")
     if supply_charts:
-        create_dashboard(token, args.superset_url, supply_charts, "Supply Chain", "supply-chain")
+        create_dashboard(token, args.superset_url, supply_charts, "Store — Supply Chain & Fulfillment", "store_supply_chain")
     if pos_charts:
         create_dashboard(token, args.superset_url, pos_charts, "Store — Sales, Promotions & Pricing", "store_pos_promotions")
     if inv_charts:

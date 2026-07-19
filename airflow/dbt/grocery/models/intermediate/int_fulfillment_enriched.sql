@@ -1,5 +1,26 @@
--- End-to-end order lifecycle: store order → fulfillment → delivery
--- Grain: one row per store_order_id
+-- Fulfillment / supply-chain enrichment: store orders + items + fulfillment +
+-- delivery + pick accuracy, one row per store_order_id.
+-- Grain: one row per store_order_id.
+--
+-- Joins stg_ordering_store_orders → stg_ordering_store_order_items (aggregated by
+-- order_id) → stg_fulfillment_orders (via store_order_id) + pick metrics from
+-- stg_fulfillment_items → delivery (stg_transport_load_items → stg_transport_loads
+-- via load_id) → store/warehouse names (stg_locations).
+--
+-- Derived durations reused from mart_order_fulfillment_funnel:
+--   days_order_to_fulfill, days_order_to_delivery, hours_to_approve.
+-- On-time rule (data-lab#29): delivered on/before requested_delivery_dt.
+--   on_time = arrived_at::date <= requested_delivery_dt (null when undelivered).
+--
+-- Source: stg_ordering_store_orders, stg_ordering_store_order_items,
+--         stg_fulfillment_orders, stg_fulfillment_items,
+--         stg_transport_load_items, stg_transport_loads, stg_locations (data-lab#29).
+
+{{
+    config(
+        materialized='table'
+    )
+}}
 
 with orders as (
     select
@@ -37,6 +58,17 @@ fulfillment as (
     from {{ ref('stg_fulfillment_orders') }}
 ),
 
+pick as (
+    select
+        fulfillment_id,
+        sum(quantity_requested::integer) as total_qty_requested,
+        sum(quantity_picked::integer)    as total_qty_picked,
+        sum(case when pick_status = 'shorted' then quantity_requested::integer
+                 else 0 end)              as total_shorted_qty
+    from {{ ref('stg_fulfillment_items') }}
+    group by fulfillment_id
+),
+
 loads as (
     select
         li.store_order_id,
@@ -54,7 +86,7 @@ loads as (
 ),
 
 store_locs as (
-    select location_id, location_name, city, state
+    select location_id, location_name, city, state, location_type
     from {{ ref('stg_locations') }}
 ),
 
@@ -62,12 +94,12 @@ final as (
     select distinct on (o.order_id)
         o.order_id,
         o.order_date,
-        o.order_dt,
         o.store_location_id,
         sl.location_name                            as store_name,
         sl.city                                     as store_city,
         sl.state                                    as store_state,
         o.warehouse_location_id,
+        wl.location_name                            as warehouse_name,
         o.requested_delivery_dt,
         o.approved_dt,
         o.approved_by,
@@ -80,6 +112,9 @@ final as (
         f.hours_to_fulfill,
         f.fulfillment_completed_at,
         f.picker_name,
+        p.total_qty_requested                       as pick_qty_requested,
+        p.total_qty_picked                          as pick_qty_picked,
+        p.total_shorted_qty,
         l.load_id,
         l.load_status,
         l.departed_at,
@@ -87,17 +122,6 @@ final as (
         l.hours_in_transit,
         l.driver                                    as driver_name,
         l.load_date,
-        case
-            when l.arrived_at is not null and o.requested_delivery_dt is not null
-                then l.arrived_at::date <= o.requested_delivery_dt
-            else null
-        end                                         as on_time,
-        case
-            when l.arrived_at is not null and o.requested_delivery_dt is not null
-                then greatest(0,
-                    extract(epoch from (l.arrived_at::timestamp - o.requested_delivery_dt::timestamp)) / 86400.0)
-            else null
-        end                                         as days_late,
         case
             when f.fulfillment_completed_at is not null and o.order_dt is not null
                 then round(
@@ -120,23 +144,25 @@ final as (
                 )
         end                                         as hours_to_approve,
         case
-            when f.fulfillment_status = 'completed'
-                and l.load_status = 'delivered'
-                then 'COMPLETE'
-            when f.fulfillment_status = 'completed'
-                then 'FULFILLED_PENDING_DELIVERY'
-            when l.load_status = 'in_transit'
-                then 'IN_TRANSIT'
-            when l.load_id is not null
-                then 'ASSIGNED_TO_LOAD'
-            when f.fulfillment_id is not null
-                then 'IN_FULFILLMENT'
-            else 'ORDER_PLACED'
-        end                                         as pipeline_stage
+            when l.arrived_at is not null
+             and o.requested_delivery_dt is not null
+             and l.arrived_at::date <= o.requested_delivery_dt
+                then true
+            else false
+        end                                         as on_time,
+        case
+            when l.arrived_at is not null
+             and o.requested_delivery_dt is not null
+                then greatest(0,
+                    extract(epoch from (l.arrived_at::timestamp - o.requested_delivery_dt::timestamp)) / 86400.0)
+            else null
+        end                                         as days_late
     from orders o
     left join store_locs sl on sl.location_id = o.store_location_id
+    left join store_locs wl on wl.location_id = o.warehouse_location_id
     left join items i on i.order_id = o.order_id
     left join fulfillment f on f.store_order_id = o.order_id
+    left join pick p on p.fulfillment_id = f.fulfillment_id
     left join loads l on l.store_order_id = o.order_id
     order by o.order_id, f.fulfillment_id nulls last, l.load_id nulls last
 )
