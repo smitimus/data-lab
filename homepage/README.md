@@ -11,7 +11,7 @@
 Service dashboard and link aggregator. Displays all running stack services as clickable tiles, reads service metadata via Docker socket, and shows health status. The homepage auto-discovers services via Docker labels — no manual config needed when adding new stacks.
 
 ## Key Config Files
-- `conf/homepage/` — all config YAML files (seeded from `stacks/homepage/` by `init.sh`)
+- `_conf/homepage/` — all config YAML files (seeded from `stacks/homepage/` by `init.sh`)
   - `services.yaml` — service group definitions
   - `bookmarks.yaml` — quick links
   - `settings.yaml` — layout and appearance

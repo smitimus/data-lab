@@ -12,7 +12,7 @@
 BI and dashboarding platform. Pre-loaded with dashboards built on the verisim grocery data marts. Connected to the `edw` PostgreSQL database.
 
 ## Key Config Files
-- `conf/superset/superset_config.py` — Superset configuration (seeded from `stacks/superset/superset_config.py` by `init.sh`)
+- `_conf/superset/superset_config.py` — Superset configuration (seeded from `stacks/superset/superset_config.py` by `init.sh`)
 - `stacks/superset/dashboards/` — Exported dashboard JSON files for import
 
 ## Usage Notes

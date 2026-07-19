@@ -12,7 +12,7 @@
 Docker stack management UI. Provides a web interface to start, stop, and manage all docker-compose stacks without SSH. All stacks in the data-lab directory are bulk-adopted on first setup via `setup.sh`.
 
 ## Key Config Files
-- `stacks/dockhand/.env` — `ENCRYPTION_KEY` (generated per install; keep stable — changing it loses stored credentials), `HOST_DATA_DIR` (host-side path to conf/dockhand)
+- `stacks/dockhand/.env` — `ENCRYPTION_KEY` (generated per install; keep stable — changing it loses stored credentials), `HOST_DATA_DIR` (host-side path to _conf/dockhand)
 
 ## Usage Notes
 - **Bulk adopt all stacks:** Run `bash setup.sh` after first start (or via Dockhand UI → Import)

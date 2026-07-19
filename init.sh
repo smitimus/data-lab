@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
 # Stack Deploy Init Script
-# Run on a fresh machine (or to wipe and reinitialize conf/).
-# Prompts to delete existing conf/ directories before recreating them.
+# Run on a fresh machine (or to wipe and reinitialize _conf/).
+# Prompts to delete existing _conf/ directories before recreating them.
 # After seeding, use start.sh / stop.sh to bring stacks online/offline.
 # =============================================================================
 
@@ -12,10 +12,10 @@ set -e
 # Derive absolute paths from this script's own location so the script works
 # regardless of where the repo was cloned (e.g. /opt/data-lab or /opt/stacks).
 #   STACKS = the repo root directory (where this script lives)
-#   CONF   = the runtime data directory, always a sibling of the repo
-#            (e.g. repo at /opt/data-lab → conf at /opt/conf)
+#   CONF   = the runtime data directory, inside the repo root (_conf/)
+#            (e.g. repo at /opt/data-lab → conf at /opt/data-lab/_conf)
 STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="$(dirname "$STACKS")/conf"
+CONF="$STACKS/_conf"
 
 # -----------------------------------------------------------------------------
 # confirm MSG — prompts the user with MSG [Y/n] and returns 0 (yes) or 1 (no).
@@ -31,9 +31,9 @@ confirm() {
 }
 
 # -----------------------------------------------------------------------------
-# Check for existing conf/ directories
+# Check for existing _conf/ directories
 # -----------------------------------------------------------------------------
-# Build a list of any conf/ subdirectories that already exist.  If the list
+# Build a list of any _conf/ subdirectories that already exist.  If the list
 # is non-empty it means a previous deploy has left data behind; the user is
 # prompted to choose between a clean wipe or an in-place re-seed.
 EXISTING_DIRS=()
@@ -43,12 +43,12 @@ done
 
 if [ ${#EXISTING_DIRS[@]} -gt 0 ]; then
     echo ""
-    echo "=== Existing conf/ directories detected ==="
+    echo "=== Existing _conf/ directories detected ==="
     for d in "${EXISTING_DIRS[@]}"; do echo "  $d"; done
     echo ""
-    if confirm "Delete all existing conf/ directories and do a clean init?"; then
+    if confirm "Delete all existing _conf/ directories and do a clean init?"; then
         # Wipe selected: remove all listed dirs so the stack starts completely fresh.
-        echo "  Removing conf/ directories..."
+        echo "  Removing _conf/ directories..."
         for d in "${EXISTING_DIRS[@]}"; do
             rm -rf "$d"
             echo "  Removed: $d"
@@ -56,7 +56,7 @@ if [ ${#EXISTING_DIRS[@]} -gt 0 ]; then
     else
         # Keep selected: seed files will still be overwritten below, but
         # database files, logs, and other runtime data are preserved.
-        echo "  Keeping existing conf/. Seeded files will be overwritten; runtime data (DBs, logs) preserved."
+        echo "  Keeping existing _conf/. Seeded files will be overwritten; runtime data (DBs, logs) preserved."
     fi
     echo ""
 fi
@@ -75,10 +75,10 @@ mkdir -p $CONF/superset/data                         # Superset cache and export
 mkdir -p $CONF/dockhand                              # Dockhand app database (SQLite)
 
 # -----------------------------------------------------------------------------
-# Seed config files into conf/
+# Seed config files into _conf/
 # -----------------------------------------------------------------------------
 # Several services need config files present before the container starts.
-# These files live in the repo (stacks/) and are copied to conf/ so that:
+# These files live in the repo (stacks/) and are copied to _conf/ so that:
 #   1. The repo copy can be updated and re-seeded without touching live data.
 #   2. The running container has a stable, editable config it can write to.
 

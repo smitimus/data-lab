@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Start all stacks in dependency order.
-# Run init.sh first on a fresh machine to seed conf/.
+# Run init.sh first on a fresh machine to seed _conf/.
 # =============================================================================
 
 # Exit immediately if any command fails, so a broken stack doesn't silently

@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Stop all stacks (reverse start order).
-# conf/ data is preserved — run init.sh to wipe and reinitialize.
+# _conf/ data is preserved — run init.sh to wipe and reinitialize.
 # =============================================================================
 
 # Resolve the repo root from this script's own location.
@@ -10,7 +10,7 @@ STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # stop NAME — runs `docker compose down` for the named stack.
 #
 # `docker compose down` stops and removes containers and networks but leaves
-# named volumes and bind-mount data (in conf/) intact.  All persistent data
+# named volumes and bind-mount data (in _conf/) intact.  All persistent data
 # (databases, logs, dashboards) survives a stop/start cycle.
 stop() {
     local name=$1
@@ -38,6 +38,6 @@ stop dockhand         # Management UI — stopped last so it can observe the shu
 echo ""
 echo "=== All stacks stopped ==="
 echo ""
-echo "conf/ data is preserved. Run ./start.sh to bring stacks back online."
-echo "Run ./init.sh to wipe conf/ and do a clean reinitialize."
+echo "_conf/ data is preserved. Run ./start.sh to bring stacks back online."
+echo "Run ./init.sh to wipe _conf/ and do a clean reinitialize."
 echo ""
