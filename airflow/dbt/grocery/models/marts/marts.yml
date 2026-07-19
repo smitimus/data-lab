@@ -737,3 +737,64 @@ models:
         tests: [not_null]
       - name: days_order_to_fulfill
       - name: days_order_to_delivery
+
+  # ── int_hr_labor_enriched ─────────────────────────────────────────────────
+  # Grain: one row per (employee_id, scheduled_date, location_id)
+
+  - name: int_hr_labor_enriched
+    columns:
+      - name: employee_id
+        tests: [not_null]
+      - name: scheduled_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: employee_cost
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100000
+
+  # ── mart_labor_cost_by_department ─────────────────────────────────────────
+  # Grain: one row per (report_date, location_id, department)
+
+  - name: mart_labor_cost_by_department
+    columns:
+      - name: report_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: department
+        tests: [not_null]
+      - name: actual_cost
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── mart_attendance_compliance ────────────────────────────────────────────
+  # Grain: one row per (report_date, location_id, department)
+
+  - name: mart_attendance_compliance
+    columns:
+      - name: report_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: department
+        tests: [not_null]
+      - name: scheduled_shifts
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: no_show_rate_pct
+          min_value: 0
+          max_value: 100
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: late_arrival_rate_pct
+          min_value: 0
+          max_value: 100

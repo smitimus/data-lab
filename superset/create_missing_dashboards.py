@@ -288,6 +288,9 @@ def main():
         "mart_inventory_valuation",
         "mart_shrinkage_analysis",
         "mart_inventory_turnover",
+        # data-lab#28: HR & Labor domain
+        "mart_labor_cost_by_department",
+        "mart_attendance_compliance",
     ]
 
     ds = {}
@@ -330,6 +333,9 @@ def main():
         "mart_inventory_valuation": "location_id",
         "mart_shrinkage_analysis": "event_date",
         "mart_inventory_turnover": "last_updated",
+        # data-lab#28: HR & Labor domain
+        "mart_labor_cost_by_department": "report_date",
+        "mart_attendance_compliance": "report_date",
     }
     for table, col in date_map.items():
         if table in ds and ds[table]:
@@ -439,6 +445,89 @@ def main():
             c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
             if c:
                 hr_charts.append(c)
+
+    # ═══ WORKFORCE / ATTENDANCE / LABOR COST DASHBOARD (data-lab#28) ════════
+    # Re-uses existing HR/Labor datasets (mart_department_labor, mart_labor_efficiency,
+    # mart_employee_productivity, mart_employee_cost) plus the two new marts.
+    wf_charts = []
+    wf_sections = [
+        {
+            "key": "mart_department_labor",
+            "name": "Scheduled vs Actual Hours by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("scheduled_hours", "SUM"), make_metric("actual_hours", "SUM")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_labor_cost_by_department",
+            "name": "Actual Labor Cost by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("actual_cost", "SUM")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_labor_cost_by_department",
+            "name": "Labor Cost % of Revenue",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("labor_cost_pct_of_revenue", "AVG")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_attendance_compliance",
+            "name": "No-Show Rate by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("no_show_rate_pct", "AVG")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_attendance_compliance",
+            "name": "Late-Arrival Rate by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("late_arrival_rate_pct", "AVG")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_attendance_compliance",
+            "name": "Break Compliance Rate",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("break_compliance_rate_pct", "AVG")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_attendance_compliance",
+            "name": "Overtime Rate by Department",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("overtime_rate_pct", "AVG")],
+                "groupby": ["department"],
+                "row_limit": 20,
+            },
+        },
+    ]
+    for sec in wf_sections:
+        ds_id = ds.get(sec["key"])
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
+            if c:
+                wf_charts.append(c)
 
     # ═══ SHRINK & LOSS DASHBOARD ═════════════════════════════════════════════
     shrink_charts = []
@@ -733,8 +822,9 @@ def main():
     # ── Step 4: Create dashboards ────────────────────────────────────────────
     print("--- Step 4: Create Dashboards ---")
 
-    if hr_charts:
-        create_dashboard(token, args.superset_url, hr_charts, "HR & Labor", "hr-labor")
+    if hr_charts or wf_charts:
+        # hr_charts = existing HR/Labor charts; wf_charts = new workforce/compliance charts
+        create_dashboard(token, args.superset_url, hr_charts + wf_charts, "Store — Workforce, Attendance & Labor Cost", "store_hr_labor")
     if shrink_charts:
         create_dashboard(token, args.superset_url, shrink_charts, "Shrink & Promotions", "shrink-promotions")
     if supply_charts:
