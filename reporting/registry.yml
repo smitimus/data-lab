@@ -1,7 +1,20 @@
+# Cross-domain reporting registry
+# Each domain ticket (#26-#31) appends one entry on publish.
+# data-lab#32 seeds this file's schema and consumes entries to build the
+# master executive dashboard + data dictionary + README (no scraping).
+#
+# Entry contract:
+#   domain:        stable key (e.g. pos_promotions)
+#   dashboard_slug:  Superset dashboard slug
+#   dashboard_title: human-readable title (prefixed "Store - " per convention)
+#   kpi_cards:      [list of KPI card definitions]
+#   datasets_used:  [list of mart tables backing the dashboard]
+#   refresh_cadence: matches the grocery_dbt DAG schedule
+
 dashboards:
 - domain: pos_promotions
   dashboard_slug: store_pos_promotions
-  dashboard_title: "Store \u2014 Sales, Promotions & Pricing"
+  dashboard_title: "Store — Sales, Promotions & Pricing"
   kpi_cards:
   - total_revenue
   - promo_lift_vs_baseline_pct
@@ -17,7 +30,7 @@ dashboards:
   refresh_cadence: daily (grocery_dbt DAG)
 - domain: inventory_shrinkage
   dashboard_slug: store_inventory_shrinkage
-  dashboard_title: "Store \u2014 Inventory, Stock & Shrinkage"
+  dashboard_title: "Store — Inventory, Stock & Shrinkage"
   kpi_cards:
   - value_on_hand_cost
   - total_value_lost
@@ -30,7 +43,7 @@ dashboards:
   refresh_cadence: daily (grocery_dbt DAG)
 - domain: fulfillment_supply_chain
   dashboard_slug: store_supply_chain
-  dashboard_title: "Store \u2014 Supply Chain & Fulfillment"
+  dashboard_title: "Store — Supply Chain & Fulfillment"
   kpi_cards:
   - fill_rate_pct
   - on_time_rate_pct
@@ -41,4 +54,31 @@ dashboards:
   - mart_order_cycle_time
   - mart_order_fulfillment_funnel
   - mart_fulfillment_pick_accuracy
+  refresh_cadence: daily (grocery_dbt DAG)
+- domain: transport_fleet
+  dashboard_slug: store_transport_fleet
+  dashboard_title: "Store — Transport & Fleet"
+  kpi_cards:
+  - on_time_rate_pct
+  - total_loads
+  - estimated_labor_cost
+  - completion_rate_pct
+  datasets_used:
+  - mart_route_efficiency
+  - mart_fleet_cost
+  - mart_fleet_utilization
+  - mart_transport_daily_metrics
+  refresh_cadence: daily (grocery_dbt DAG)
+- domain: loyalty_crm
+  dashboard_slug: store_loyalty_crm
+  dashboard_title: "Store — Loyalty & Retention"
+  kpi_cards:
+  - active_rate_pct
+  - redemption_rate_pct
+  - points_liability
+  - tier_upgrades
+  datasets_used:
+  - mart_loyalty_rfm
+  - mart_loyalty_engagement
+  - mart_loyalty_cohort
   refresh_cadence: daily (grocery_dbt DAG)

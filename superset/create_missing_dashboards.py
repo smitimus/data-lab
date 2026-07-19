@@ -291,6 +291,11 @@ def main():
         # data-lab#28: HR & Labor domain
         "mart_labor_cost_by_department",
         "mart_attendance_compliance",
+        # data-lab#30: Transport & Logistics domain
+        "mart_route_efficiency",
+        "mart_fleet_cost",
+        "mart_fleet_utilization",
+        "mart_transport_daily_metrics",
     ]
 
     ds = {}
@@ -336,6 +341,11 @@ def main():
         # data-lab#28: HR & Labor domain
         "mart_labor_cost_by_department": "report_date",
         "mart_attendance_compliance": "report_date",
+        # data-lab#30: Transport & Logistics domain
+        "mart_route_efficiency": "warehouse_name",
+        "mart_fleet_cost": "license_plate",
+        "mart_fleet_utilization": "license_plate",
+        "mart_transport_daily_metrics": "load_date",
     }
     for table, col in date_map.items():
         if table in ds and ds[table]:
@@ -738,6 +748,193 @@ def main():
             if c:
                 supply_charts.append(c)
 
+    # ═══ TRANSPORT & FLEET DASHBOARD (data-lab#30) ══════════════════════════
+    transport_charts = []
+    transport_sections = [
+        {
+            "key": "mart_route_efficiency",
+            "name": "On-Time Rate % by Route",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("on_time_rate_pct", "AVG")],
+                "groupby": ["store_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_route_efficiency",
+            "name": "Estimated Route Labor Cost",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("estimated_route_cost_labor", "SUM")],
+                "groupby": ["store_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_route_efficiency",
+            "name": "Avg Transit Hours by Route",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("avg_transit_hours", "AVG")],
+                "groupby": ["store_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_fleet_cost",
+            "name": "Estimated Labor Cost by Truck/Driver",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("estimated_labor_cost", "SUM")],
+                "groupby": ["driver_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_fleet_utilization",
+            "name": "Fleet On-Time Rate %",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("on_time_rate_pct", "AVG")],
+                "groupby": ["utilization_status"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_fleet_utilization",
+            "name": "Total Loads by Truck",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("total_loads", "SUM")],
+                "groupby": ["license_plate"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_transport_daily_metrics",
+            "name": "Daily Load Volume",
+            "viz": "echarts_timeseries_line",
+            "params": {
+                "metrics": [make_metric("total_loads", "SUM")],
+                "groupby": ["warehouse_name"],
+                "granularity_sqla": "load_date",
+                "time_grain_sqla": "P1D",
+                "row_limit": 10000,
+            },
+        },
+        {
+            "key": "mart_transport_daily_metrics",
+            "name": "Daily Completion Rate %",
+            "viz": "echarts_timeseries_line",
+            "params": {
+                "metrics": [make_metric("completion_rate_pct", "AVG")],
+                "groupby": ["warehouse_name"],
+                "granularity_sqla": "load_date",
+                "time_grain_sqla": "P1D",
+                "row_limit": 10000,
+            },
+        },
+    ]
+    for sec in transport_sections:
+        ds_id = ds.get(sec["key"])
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
+            if c:
+                transport_charts.append(c)
+
+    print()
+
+    # ═══ LOYALTY & RETENTION DASHBOARD (data-lab#31) ═════════════════════
+    loyalty_charts = []
+    loyalty_sections = [
+        {
+            "key": "mart_loyalty_rfm",
+            "name": "RFM Segment Distribution",
+            "viz": "pie",
+            "params": {
+                "metrics": [make_metric("member_id", "COUNT_DISTINCT")],
+                "groupby": ["rfm_segment"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_loyalty_rfm",
+            "name": "Avg Monetary Value by Segment",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("monetary", "AVG")],
+                "groupby": ["rfm_segment"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_loyalty_rfm",
+            "name": "Avg Frequency by Segment",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("frequency", "AVG")],
+                "groupby": ["rfm_segment"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_loyalty_engagement",
+            "name": "Active Rate %",
+            "viz": "big_number_total",
+            "params": {
+                "metric": make_metric("active_rate_pct", "AVG", label="Active Rate %"),
+                "subheader": "Share of members active in last 90 days",
+            },
+        },
+        {
+            "key": "mart_loyalty_engagement",
+            "name": "Redemption Rate %",
+            "viz": "big_number_total",
+            "params": {
+                "metric": make_metric("redemption_rate_pct", "AVG", label="Redemption Rate %"),
+                "subheader": "Points redeemed / points earned",
+            },
+        },
+        {
+            "key": "mart_loyalty_engagement",
+            "name": "Points Liability (Outstanding)",
+            "viz": "big_number_total",
+            "params": {
+                "metric": make_metric("points_liability", "SUM", label="Outstanding Points Liability"),
+                "subheader": "Sum of active member point balances",
+            },
+        },
+        {
+            "key": "mart_loyalty_engagement",
+            "name": "Tier Migration (Upgrades)",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("tier_upgrades", "SUM")],
+                "groupby": ["current_tier"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_loyalty_cohort",
+            "name": "Members by Tier",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("member_count", "SUM")],
+                "groupby": ["loyalty_tier"],
+                "row_limit": 10,
+            },
+        },
+    ]
+    for sec in loyalty_sections:
+        ds_id = ds.get(sec["key"])
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
+            if c:
+                loyalty_charts.append(c)
+
+    print()
+
     # ═══ POS, SALES & PROMOTIONS DASHBOARD (data-lab#26) ════════════════════
     pos_charts = []
     pos_sections = [
@@ -918,6 +1115,10 @@ def main():
         create_dashboard(token, args.superset_url, pos_charts, "Store — Sales, Promotions & Pricing", "store_pos_promotions")
     if inv_charts:
         create_dashboard(token, args.superset_url, inv_charts, "Store — Inventory, Stock & Shrinkage", "store_inventory_shrinkage")
+    if transport_charts:
+        create_dashboard(token, args.superset_url, transport_charts, "Store — Transport & Fleet", "store_transport_fleet")
+    if loyalty_charts:
+        create_dashboard(token, args.superset_url, loyalty_charts, "Store — Loyalty & Retention", "store_loyalty_crm")
 
     print("\n=== Done ===")
     print(f"\nSummary:")
@@ -926,6 +1127,8 @@ def main():
     print(f"  Supply Chain:      {len(supply_charts)} charts")
     print(f"  POS & Promotions:  {len(pos_charts)} charts")
     print(f"  Inventory & Shrink: {len(inv_charts)} charts")
+    print(f"  Transport & Fleet:  {len(transport_charts)} charts")
+    print(f"  Loyalty & Retention: {len(loyalty_charts)} charts")
 
 
 if __name__ == "__main__":

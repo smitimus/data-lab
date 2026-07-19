@@ -911,3 +911,155 @@ models:
   - dbt_expectations.expect_table_row_count_to_be_between:
       min_value: 1
       max_value: 10000
+
+  # ── int_transport_enriched ────────────────────────────────────────────────
+  # Grain: one row per load_id
+
+  - name: int_transport_enriched
+    columns:
+      - name: load_id
+        tests: [unique, not_null]
+      - name: truck_id
+        tests: [not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: destination_location_id
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100000
+
+  # ── mart_route_efficiency ─────────────────────────────────────────────────
+  # Grain: one row per route_key (warehouse_location_id -> destination_location_id)
+
+  - name: mart_route_efficiency
+    columns:
+      - name: route_key
+        tests: [unique, not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: destination_location_id
+        tests: [not_null]
+      - name: total_loads
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 1000
+      - dbt_expectations.expect_column_values_to_be_between:
+          column_name: on_time_rate_pct
+          min_value: 0
+          max_value: 100
+
+  # ── mart_fleet_cost ───────────────────────────────────────────────────────
+  # Grain: one row per (truck_id, driver_id)
+
+  - name: mart_fleet_cost
+    columns:
+      - name: truck_id
+        tests: [not_null]
+      - name: driver_id
+        tests: [not_null]
+      - name: total_loads
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── mart_fleet_utilization (extended with cost) ───────────────────────────
+  # Grain: one row per truck_id
+
+  - name: mart_fleet_utilization
+    columns:
+      - name: truck_id
+        tests: [unique, not_null]
+      - name: license_plate
+        tests: [unique, not_null]
+      - name: total_loads
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_column_values_to_be_in_set:
+          column_name: utilization_status
+          value_set: ['ACTIVE', 'IDLE', 'INACTIVE']
+
+  # ── mart_transport_daily_metrics (extended with cost) ─────────────────────
+  # Grain: one row per (load_date, warehouse_location_id)
+
+  - name: mart_transport_daily_metrics
+    columns:
+      - name: load_date
+        tests: [not_null]
+      - name: warehouse_location_id
+        tests: [not_null]
+      - name: total_loads
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 10000
+
+  # ── int_loyalty_enriched ──────────────────────────────────────────────────
+  # Grain: one row per (member_id, activity_date, pt_id) — point-event grain
+
+  - name: int_loyalty_enriched
+    columns:
+      - name: member_id
+        tests: [not_null]
+      - name: activity_date
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 1000000
+
+  # ── mart_loyalty_rfm ──────────────────────────────────────────────────────
+  # Grain: one row per member_id
+
+  - name: mart_loyalty_rfm
+    columns:
+      - name: member_id
+        tests: [unique, not_null]
+      - name: rfm_segment
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Champions', 'Loyal', 'At Risk', 'Hibernating', 'New', 'Regular']
+      - name: recency_score
+      - name: frequency_score
+      - name: monetary_score
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100000
+
+  # ── mart_loyalty_engagement ───────────────────────────────────────────────
+  # Grain: one 'ALL' rollup row + one row per current_tier
+
+  - name: mart_loyalty_engagement
+    columns:
+      - name: current_tier
+        tests: [not_null]
+      - name: points_liability
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 100
+
+  # ── mart_loyalty_cohort (grain documented) ────────────────────────────────
+  # Grain: one row per member_id
+
+  - name: mart_loyalty_cohort
+    columns:
+      - name: member_id
+        tests: [unique, not_null]
+      - name: loyalty_tier
+        tests: [not_null]
+      - name: points_balance
+        tests: [not_null]
+      - name: total_spend
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 100000
