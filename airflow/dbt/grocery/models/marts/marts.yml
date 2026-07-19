@@ -223,8 +223,83 @@ models:
           column_name: units_sold
           min_value: 0
 
+  # ── int_pos_sales_enriched ────────────────────────────────────────────────
+  # Grain: one row per transaction_item (item_id)
+
+  - name: int_pos_sales_enriched
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+      - name: transaction_id
+        tests: [not_null]
+      - name: transaction_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: product_id
+        tests: [not_null]
+      - name: line_total
+        tests: [not_null]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1000
+          max_value: 5000000
+
+  # ── mart_category_sales_performance ───────────────────────────────────────
+  # Grain: one row per (transaction_date, location_id, category)
+
+  - name: mart_category_sales_performance
+    columns:
+      - name: transaction_date
+        tests: [not_null]
+      - name: location_id
+        tests: [not_null]
+      - name: category
+        tests: [not_null]
+      - name: category_revenue
+        tests: [not_null]
+      - name: category_units
+        tests: [not_null]
+      - name: avg_basket_size
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 100000
+
+  # ── mart_product_price_elasticity ─────────────────────────────────────────
+  # Grain: one row per (product_id, sale_month)
+
+  - name: mart_product_price_elasticity
+    columns:
+      - name: product_id
+        tests: [not_null]
+      - name: sale_month
+        tests: [not_null]
+      - name: units_sold
+        tests: [not_null]
+      - name: effective_price
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 50
+          max_value: 100000
+
+  # ── mart_promotion_redemption ─────────────────────────────────────────────
+  # Grain: one row per promotion (coupon_id or deal_id)
+
+  - name: mart_promotion_redemption
+    columns:
+      - name: promotion_id
+        tests: [not_null]
+      - name: promotion_type
+        tests: [not_null, accepted_values: {values: ['coupon', 'combo_deal']}]
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 1000
+
   # ── mart_promotion_effectiveness ──────────────────────────────────────────
-  # Grain: one row per (ad_week_start, product_id, is_ad_item)
+  # Grain: one row per (ad_week_start, ad_week_end, ad_name, product_id, is_ad_item,
+  #         discount_pct, promoted_price)
 
   - name: mart_promotion_effectiveness
     columns:
@@ -238,6 +313,11 @@ models:
         tests: [not_null]
       - name: total_revenue
         tests: [not_null]
+      - name: promo_lift_vs_baseline_pct
+    data_tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 200000
 
   # ── mart_shrink_analysis ──────────────────────────────────────────────────
   # Grain: one row per (event_date, location_id, product_id, shrinkage_type)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Create missing Superset dashboards for HR & Labor, Shrink & Loss, and Fulfillment.
+Create missing Superset dashboards for HR & Labor, Shrink & Loss, Fulfillment,
+Supply Chain, and Store (per-domain) dashboards.
 
 Registers unused mart tables, builds charts, and creates dedicated dashboards
 instead of cramming everything into the Data Quality catch-all.
@@ -278,6 +279,11 @@ def main():
         "mart_department_shrinkage",
         "mart_promotion_effectiveness",
         "mart_supply_chain_summary",
+        # data-lab#26: POS & Sales + Promotions domain
+        "mart_category_sales_performance",
+        "mart_product_price_elasticity",
+        "mart_promotion_redemption",
+        "mart_promotion_effectiveness",
     ]
 
     ds = {}
@@ -311,6 +317,11 @@ def main():
         "mart_department_shrinkage": "report_date",
         "mart_promotion_effectiveness": "ad_week_start",
         "mart_supply_chain_summary": "order_date",
+        # data-lab#26: POS & Sales + Promotions domain
+        "mart_category_sales_performance": "transaction_date",
+        "mart_product_price_elasticity": "sale_month",
+        "mart_promotion_redemption": "valid_from",
+        "mart_promotion_effectiveness": "ad_week_start",
     }
     for table, col in date_map.items():
         if table in ds and ds[table]:
@@ -545,6 +556,99 @@ def main():
             if c:
                 supply_charts.append(c)
 
+    # ═══ POS, SALES & PROMOTIONS DASHBOARD (data-lab#26) ════════════════════
+    pos_charts = []
+    pos_sections = [
+        {
+            "key": "mart_daily_revenue",
+            "name": "Daily Revenue Trend",
+            "viz": "echarts_timeseries_line",
+            "params": {
+                "metrics": [make_metric("total_revenue", "SUM")],
+                "groupby": ["location_name"],
+                "granularity_sqla": "transaction_date",
+                "time_grain_sqla": "P1D",
+                "row_limit": 10000,
+            },
+        },
+        {
+            "key": "mart_category_sales_performance",
+            "name": "Category Revenue",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("category_revenue", "SUM")],
+                "groupby": ["category"],
+                "row_limit": 50,
+            },
+        },
+        {
+            "key": "mart_category_sales_performance",
+            "name": "Avg Basket Size by Category",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("avg_basket_size", "AVG")],
+                "groupby": ["category"],
+                "row_limit": 50,
+            },
+        },
+        {
+            "key": "mart_category_sales_performance",
+            "name": "Units Sold by Category",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("category_units", "SUM")],
+                "groupby": ["category"],
+                "row_limit": 50,
+            },
+        },
+        {
+            "key": "mart_promotion_effectiveness",
+            "name": "Promo Lift vs Baseline %",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("promo_lift_vs_baseline_pct", "AVG")],
+                "groupby": ["ad_name"],
+                "row_limit": 20,
+            },
+        },
+        {
+            "key": "mart_promotion_redemption",
+            "name": "Coupon Redemption Rate",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("redemption_rate_pct", "AVG")],
+                "groupby": ["promotion_name"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_promotion_redemption",
+            "name": "Coupon vs Combo Redemptions",
+            "viz": "pie",
+            "params": {
+                "metrics": [make_metric("coupon_txn_count", "SUM")],
+                "groupby": ["promotion_type"],
+                "row_limit": 10,
+            },
+        },
+        {
+            "key": "mart_product_price_elasticity",
+            "name": "Price Elasticity Explorer",
+            "viz": "bar",
+            "params": {
+                "metrics": [make_metric("price_elasticity", "AVG")],
+                "groupby": ["product_id"],
+                "row_limit": 50,
+            },
+        },
+    ]
+    for sec in pos_sections:
+        ds_id = ds.get(sec["key"])
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, sec["name"], sec["viz"], sec["params"])
+            if c:
+                pos_charts.append(c)
+
     print()
 
     # ── Step 4: Create dashboards ────────────────────────────────────────────
@@ -556,12 +660,15 @@ def main():
         create_dashboard(token, args.superset_url, shrink_charts, "Shrink & Promotions", "shrink-promotions")
     if supply_charts:
         create_dashboard(token, args.superset_url, supply_charts, "Supply Chain", "supply-chain")
+    if pos_charts:
+        create_dashboard(token, args.superset_url, pos_charts, "Store — Sales, Promotions & Pricing", "store_pos_promotions")
 
     print("\n=== Done ===")
     print(f"\nSummary:")
     print(f"  HR & Labor:        {len(hr_charts)} charts")
     print(f"  Shrink & Promo:    {len(shrink_charts)} charts")
     print(f"  Supply Chain:      {len(supply_charts)} charts")
+    print(f"  POS & Promotions:  {len(pos_charts)} charts")
 
 
 if __name__ == "__main__":

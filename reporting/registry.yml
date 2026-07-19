@@ -1,0 +1,30 @@
+# Cross-domain reporting registry
+# Each domain ticket (#26-#31) appends one entry on publish.
+# data-lab#32 seeds this file's schema and consumes entries to build the
+# master executive dashboard + data dictionary + README (no scraping).
+#
+# Entry contract:
+#   domain:        stable key (e.g. pos_promotions)
+#   dashboard_slug:  Superset dashboard slug
+#   dashboard_title: human-readable title (prefixed "Store - " per convention)
+#   kpi_cards:      [list of KPI card definitions]
+#   datasets_used:  [list of mart tables backing the dashboard]
+#   refresh_cadence: matches the grocery_dbt DAG schedule
+
+dashboards:
+  - domain: pos_promotions
+    dashboard_slug: store_pos_promotions
+    dashboard_title: "Store — Sales, Promotions & Pricing"
+    kpi_cards:
+      - total_revenue
+      - promo_lift_vs_baseline_pct
+      - avg_basket_size
+      - coupon_redemption_rate
+      - price_elasticity
+    datasets_used:
+      - mart_daily_revenue
+      - mart_category_sales_performance
+      - mart_promotion_effectiveness
+      - mart_promotion_redemption
+      - mart_product_price_elasticity
+    refresh_cadence: "daily (grocery_dbt DAG)"
