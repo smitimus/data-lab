@@ -77,6 +77,11 @@ def register_dataset(token, base_url, db_id, table_name, schema="mart"):
         print(f"  ✓ Registered '{schema}.{table_name}' (id={ds_id})")
         return ds_id
     elif resp.status_code == 422:
+        # Already exists — recover the existing dataset id so callers can build charts on it.
+        ds_id = _find_dataset_id(token, base_url, db_id, table_name, schema)
+        if ds_id:
+            print(f"  ~ '{schema}.{table_name}' already exists (id={ds_id})")
+            return ds_id
         print(f"  ~ '{schema}.{table_name}' may already exist")
         return None
     else:
@@ -100,6 +105,11 @@ def set_main_dttm(token, base_url, ds_id, col):
 
 
 def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
+    # Idempotent: reuse an existing chart with the same name (avoids duplicates on re-run).
+    existing = _find_chart_id(token, base_url, slice_name)
+    if existing:
+        print(f"  ~ Chart '{slice_name}' already exists (id={existing})")
+        return {"id": existing, "slice_name": slice_name}
     base_params = {
         "datasource": f"{ds_id}__table",
         "viz_type": viz_type,
@@ -129,6 +139,40 @@ def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
     else:
         print(f"  ✗ Failed '{slice_name}': {resp.status_code} {resp.text[:200]}")
         return None
+
+
+def _find_dataset_id(token, base_url, db_id, table_name, schema="mart"):
+    try:
+        r = requests.get(
+            urljoin(base_url, "/api/v1/dataset/"),
+            headers=headers(token),
+            params={"q": json.dumps({"page_size": 500})},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            for d in r.json().get("result", []):
+                if d.get("table_name") == table_name and d.get("schema") == schema:
+                    return d["id"]
+    except Exception:
+        pass
+    return None
+
+
+def _find_chart_id(token, base_url, slice_name):
+    try:
+        r = requests.get(
+            urljoin(base_url, "/api/v1/chart/"),
+            headers=headers(token),
+            params={"q": json.dumps({"page_size": 500})},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            for c in r.json().get("result", []):
+                if c.get("slice_name") == slice_name:
+                    return c["id"]
+    except Exception:
+        pass
+    return None
 
 
 def create_dashboard(token, base_url, chart_ids, title, slug):
@@ -1099,6 +1143,60 @@ def main():
             if c:
                 inv_charts.append(c)
 
+    # ═══ EXECUTIVE MASTER DASHBOARD (data-lab#32) ══════════════════════════
+    # Top-line KPIs across all six domains on one screen. Reads the same marts
+    # the per-domain dashboards use (registry contract in reporting/registry.yml).
+    exec_tables = [
+        "mart_daily_revenue",
+        "mart_inventory_valuation",
+        "mart_shrinkage_analysis",
+        "mart_labor_cost_by_department",
+        "mart_supply_chain_kpis",
+        "mart_route_efficiency",
+        "mart_loyalty_engagement",
+    ]
+    exec_dttm = {
+        "mart_daily_revenue": "transaction_date",
+        "mart_inventory_valuation": "location_id",
+        "mart_shrinkage_analysis": "event_date",
+        "mart_labor_cost_by_department": "report_date",
+        "mart_supply_chain_kpis": "report_date",
+        "mart_route_efficiency": "warehouse_name",
+        "mart_loyalty_engagement": None,
+    }
+    for t in exec_tables:
+        if t not in ds:
+            ds_id = register_dataset(token, args.superset_url, grocery_db_id, t)
+            if ds_id:
+                ds[t] = ds_id
+    for t, col in exec_dttm.items():
+        if t in ds and ds[t] and col:
+            set_main_dttm(token, args.superset_url, ds[t], col)
+
+    exec_charts = []
+    exec_kpis = [
+        ("Exec: Total Revenue", "mart_daily_revenue", "total_revenue", "SUM", "$,.0f", "All-time POS revenue"),
+        ("Exec: Inventory On-Hand Value", "mart_inventory_valuation", "value_on_hand_cost", "SUM", "$,.0f", "Cost value of stock on hand"),
+        ("Exec: Shrink Value Lost", "mart_shrinkage_analysis", "total_value_lost", "SUM", "$,.0f", "Total shrinkage $ lost"),
+        ("Exec: Labor Cost", "mart_labor_cost_by_department", "actual_cost", "SUM", "$,.0f", "Actual labor cost (dept/day)"),
+        ("Exec: Supply Chain Fill Rate", "mart_supply_chain_kpis", "fill_rate_pct", "AVG", ".1f", "Order fill rate %"),
+        ("Exec: Transport On-Time %", "mart_route_efficiency", "on_time_rate_pct", "AVG", ".1f", "Load on-time delivery %"),
+        ("Exec: Loyalty Active Rate", "mart_loyalty_engagement", "active_rate_pct", "AVG", ".1f", "Members active in 90d"),
+        ("Exec: Points Liability", "mart_loyalty_engagement", "points_liability", "AVG", ",.0f", "Outstanding points obligation"),
+    ]
+    for name, tbl, col, agg, fmt, sub in exec_kpis:
+        ds_id = ds.get(tbl)
+        if ds_id:
+            c = create_chart(token, args.superset_url, ds_id, name, "big_number_total", {
+                "metric": make_metric(col, agg),
+                "subheader": sub,
+                "y_axis_format": fmt,
+                "header_font_size": 0.4,
+                "subheader_font_size": 0.15,
+            })
+            if c:
+                exec_charts.append(c)
+
     print()
 
     # ── Step 4: Create dashboards ────────────────────────────────────────────
@@ -1119,6 +1217,8 @@ def main():
         create_dashboard(token, args.superset_url, transport_charts, "Store — Transport & Fleet", "store_transport_fleet")
     if loyalty_charts:
         create_dashboard(token, args.superset_url, loyalty_charts, "Store — Loyalty & Retention", "store_loyalty_crm")
+    if exec_charts:
+        create_dashboard(token, args.superset_url, exec_charts, "Store — Executive Performance Overview", "store_performance_exec")
 
     print("\n=== Done ===")
     print(f"\nSummary:")
@@ -1129,6 +1229,7 @@ def main():
     print(f"  Inventory & Shrink: {len(inv_charts)} charts")
     print(f"  Transport & Fleet:  {len(transport_charts)} charts")
     print(f"  Loyalty & Retention: {len(loyalty_charts)} charts")
+    print(f"  Executive Overview:  {len(exec_charts)} charts")
 
 
 if __name__ == "__main__":
