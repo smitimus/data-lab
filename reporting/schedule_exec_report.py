@@ -4,11 +4,11 @@ Create (idempotently) the Store Performance Executive daily digest report
 schedule in Superset (data-lab#32).
 
 This wires the Executive Overview dashboard (id 13, slug `store_performance_exec`)
-to a daily PDF/PNG email snapshot. Run it once Superset's report worker is
-available (see PREREQUISITES below). It is safe to re-run: it skips if a
-schedule with the same name already exists.
+to a daily email snapshot. Run it once Superset's report worker is available
+(see PREREQUISITES below). It is safe to re-run: it skips if a schedule with
+the same name already exists.
 
-PREREQUISITES (InfraOps — see data-lab ticket for enabling scheduled reports):
+PREREQUISITES (Infra Dev — see data-lab#35 for enabling scheduled reports):
   1. `ALERT_REPORTS` feature flag enabled in superset_config.py FEATURE_FLAGS.
   2. A Superset celery worker + celery beat present in the stack (the report
      scheduler runs as a celery task; the Airflow worker does NOT serve it).
@@ -17,6 +17,12 @@ PREREQUISITES (InfraOps — see data-lab ticket for enabling scheduled reports):
 
 Until those exist, the /api/v1/report/ blueprint is not registered and this
 script will report a clear blocker instead of failing silently.
+
+REPORT FORMAT NOTE: the stock apache/superset:4.1.2 image ships no headless
+browser, so PNG/PDF *screenshot* reports cannot render until the worker image
+gains Chromium. CSV (data attachment) and LINK (URL in email) reports work on
+the stock image. Default below is CSV for that reason; pass --format PNG/PDF
+only once a Chromium-enabled worker exists (Infra Dev ticket data-lab#35).
 
 Usage:
   python3 schedule_exec_report.py \
@@ -79,7 +85,13 @@ def main():
     p.add_argument("--recipient", default=os.environ.get("REPORT_RECIPIENT_EMAIL", ""))
     p.add_argument("--crontab", default="0 7 * * *")
     p.add_argument("--timezone", default="America/New_York")
-    p.add_argument("--format", dest="report_format", default="PDF", choices=["PDF", "PNG"])
+    p.add_argument(
+        "--format",
+        dest="report_format",
+        default="CSV",
+        choices=["CSV", "PNG", "PDF"],
+        help="CSV/LINK work on stock image (no headless browser). PNG/PDF need a Chromium-enabled worker (data-lab#35).",
+    )
     args = p.parse_args()
 
     if not args.recipient:
@@ -94,7 +106,7 @@ def main():
         print(
             "BLOCKED: /api/v1/report/ is not registered.\n"
             "The ALERT_REPORTS feature flag is off (or no celery report worker is present).\n"
-            "Enable scheduled reports per data-lab ticket, then re-run this script."
+            "Enable scheduled reports per data-lab#35 (Infra Dev), then re-run this script."
         )
         sys.exit(3)
     probe.raise_for_status()
