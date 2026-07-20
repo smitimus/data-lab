@@ -51,8 +51,8 @@ domain.
 ## Scheduled reports (executive daily digest)
 
 `reporting/schedule_exec_report.py` wires the Executive Overview dashboard
-(slug `store_performance_exec`) to a daily email snapshot (PDF/PNG). It is
-idempotent and safe to re-run.
+(slug `store_performance_exec`) to a daily email digest. It is idempotent and
+safe to re-run.
 
 ```bash
 python3 reporting/schedule_exec_report.py \
@@ -61,12 +61,16 @@ python3 reporting/schedule_exec_report.py \
   --crontab "0 7 * * *"
 ```
 
-**Prerequisites (InfraOps — Superset report worker):** the `ALERT_REPORTS`
-feature flag must be enabled, a Superset celery worker + celery beat must be
-present in the stack (the Airflow worker does not serve Superset reports), and
-SMTP must be configured. Until those exist, `/api/v1/report/` is not registered
-and the script reports a clear blocker. See the linked data-lab ticket for
-enabling scheduled reports.
+Default format is **CSV** (data attached to the email). The stock
+`apache/superset:4.1.2` worker image ships no headless browser, so PNG/PDF
+*screenshot* reports need a Chromium-enabled worker — pass `--format PNG|PDF`
+only after Infra Dev adds Chromium to the worker image (data-lab#35).
+
+**Prerequisites (Infra Dev — Superset report worker, data-lab#35):** the
+`ALERT_REPORTS` feature flag must be enabled, a Superset celery worker + celery
+beat must be present in the stack (the Airflow worker does not serve Superset
+reports), and SMTP must be configured. Until those exist, `/api/v1/report/` is
+not registered and the script reports a clear blocker.
 
 ## Regenerating docs
 
