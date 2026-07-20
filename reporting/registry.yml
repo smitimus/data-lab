@@ -28,6 +28,21 @@ dashboards:
   - mart_promotion_redemption
   - mart_product_price_elasticity
   refresh_cadence: daily (grocery_dbt DAG)
+- domain: hr_labor
+  dashboard_slug: store_hr_labor
+  dashboard_title: "Store — Workforce, Attendance & Labor Cost"
+  kpi_cards:
+  - actual_labor_cost
+  - attendance_rate_pct
+  - hours_utilization_pct
+  - overtime_rate
+  - labor_cost_pct_revenue
+  datasets_used:
+  - mart_labor_cost_by_department
+  - mart_attendance_compliance
+  - mart_department_labor
+  - mart_employee_cost
+  refresh_cadence: daily (grocery_dbt DAG)
 - domain: inventory_shrinkage
   dashboard_slug: store_inventory_shrinkage
   dashboard_title: "Store — Inventory, Stock & Shrinkage"

@@ -48,6 +48,26 @@ builder section to `create_missing_dashboards.py`.
 See `reporting/DATA_DICTIONARY.md` for the mart → business-question mapping per
 domain.
 
+## Scheduled reports (executive daily digest)
+
+`reporting/schedule_exec_report.py` wires the Executive Overview dashboard
+(slug `store_performance_exec`) to a daily email snapshot (PDF/PNG). It is
+idempotent and safe to re-run.
+
+```bash
+python3 reporting/schedule_exec_report.py \
+  --superset-url http://localhost:8088 \
+  --recipient chris@example.com \
+  --crontab "0 7 * * *"
+```
+
+**Prerequisites (InfraOps — Superset report worker):** the `ALERT_REPORTS`
+feature flag must be enabled, a Superset celery worker + celery beat must be
+present in the stack (the Airflow worker does not serve Superset reports), and
+SMTP must be configured. Until those exist, `/api/v1/report/` is not registered
+and the script reports a clear blocker. See the linked data-lab ticket for
+enabling scheduled reports.
+
 ## Regenerating docs
 
 ```
