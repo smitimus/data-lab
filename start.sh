@@ -92,6 +92,11 @@ start cloudbeaver
 #    Started after airflow so the dbt project files are stable; needs postgres_network.
 start dbt-docs
 
+# 10. MinIO — S3-compatible object storage (data-lab#35 report export target).
+#     Standalone; joins postgres_network so airflow-worker reaches it at
+#     http://minio:9000. The export DAG uploads executive-report CSVs here.
+start minio
+
 echo ""
 echo "=== All stacks started ==="
 echo ""

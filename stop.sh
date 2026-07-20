@@ -22,6 +22,8 @@ stop() {
 
 echo "=== Stopping all stacks ==="
 
+stop minio           # S3 storage — standalone; stop first (reverse of start order)
+
 # Stacks are stopped in reverse start order so that dependents are torn down
 # before the services they depend on.  Stopping postgres before Airflow, for
 # example, would cause Airflow to log connection errors during shutdown.

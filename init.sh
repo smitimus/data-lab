@@ -88,6 +88,8 @@ mkdir -p $CONF/superset
 # psycopg2-binary here at init time; PYTHONPATH in compose.yaml points here so
 # both superset-init and the main superset container find the package.
 mkdir -p $CONF/superset/pip-extra && chmod 777 $CONF/superset/pip-extra
+# minio: world-writable data dir for S3 object storage (data-lab#35 report export).
+mkdir -p $CONF/minio && chmod 777 $CONF/minio
 # superset_config.py — main Superset configuration (DB URI, secret key, feature flags).
 cp $STACKS/superset/superset_config.py $CONF/superset/superset_config.py
 # setup.py — Python script run by the superset-setup container on first boot

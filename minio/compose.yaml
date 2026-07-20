@@ -1,0 +1,60 @@
+# MinIO — S3-compatible object storage
+# 260720 - added for data-lab#35 (executive report CSV export target)
+# Standalone service; joins postgres_network so airflow-worker reaches it at
+# http://minio:9000. Web console exposed on host at ${IP}:9001.
+# TODO: pin minio/mc to a specific RELEASE.* tag for reproducibility.
+
+services:
+  minio:
+    container_name: minio
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      MINIO_BROWSER_REDIRECT_URL: http://${IP}:9001
+    volumes:
+      - ${CONF}/minio:/data
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    labels:
+      - homepage.group=${HOMEPAGE_GROUP}
+      - homepage.name=MinIO
+      - homepage.icon=minio.png
+      - homepage.href=http://${IP}:${MINIO_CONSOLE_PORT:-9001}/
+      - homepage.description=S3 object storage — admin/adminadmin
+    networks:
+      - postgres_network
+
+  # One-shot bucket provisioning (idempotent via --ignore-existing).
+  minio-init:
+    container_name: minio-init
+    image: minio/mc:latest
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY}
+        until mc ready local; do sleep 1; done
+        mc mb --ignore-existing local/${S3_BUCKET}
+        echo "minio-init: bucket '${S3_BUCKET}' ready."
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - postgres_network
+
+networks:
+  postgres_network:
+    external: true
+    name: postgres_postgres_network
