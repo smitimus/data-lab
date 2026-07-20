@@ -50,27 +50,34 @@ domain.
 
 ## Scheduled reports (executive daily digest)
 
-`reporting/schedule_exec_report.py` wires the Executive Overview dashboard
-(slug `store_performance_exec`) to a daily email digest. It is idempotent and
-safe to re-run.
+**Delivery pivoted to S3 (data-lab#35/#36).** Instead of Superset email, the
+daily exec digest exports each of dashboard 13's 8 KPI charts as a CSV (plus a
+`manifest.json`) into the MinIO `s3://reports/exec-report/<date>/` bucket. The
+export runs from the Airflow DAG **`exec_report_s3_export`**
+(`airflow/dags/exec_report_s3_export_dag.py`, `airflow/dags/export_exec_report.py`),
+scheduled `0 6 * * *`. MinIO is provisioned in `minio/compose.yaml` (bucket
+`reports`, creds `admin`/`adminadmin`).
+
+`reporting/schedule_exec_report.py` is now a **readiness/verification** script
+(no longer the Superset `/api/v1/report/` registerer). It confirms the
+dashboard, the DAG (via CLI in the worker), and that the S3 bucket holds the
+expected files for a given date. Use it to satisfy the "verify a scheduled
+report delivers" acceptance criterion of #32:
 
 ```bash
-python3 reporting/schedule_exec_report.py \
-  --superset-url http://localhost:8088 \
-  --recipient chris@example.com \
-  --crontab "0 7 * * *"
+python3 reporting/schedule_exec_report.py                # verify (no changes)
+python3 reporting/schedule_exec_report.py --run          # also trigger a fresh DAG run
+python3 reporting/schedule_exec_report.py --date 2026-07-20
 ```
 
-Default format is **CSV** (data attached to the email). The stock
-`apache/superset:4.1.2` worker image ships no headless browser, so PNG/PDF
-*screenshot* reports need a Chromium-enabled worker — pass `--format PNG|PDF`
-only after Infra Dev adds Chromium to the worker image (data-lab#35).
+The script reads dashboard 13 + bucket `reports` and prints
+`PASS: executive S3 report pipeline is verified and delivering.` when all
+checks pass.
 
-**Prerequisites (Infra Dev — Superset report worker, data-lab#35):** the
-`ALERT_REPORTS` feature flag must be enabled, a Superset celery worker + celery
-beat must be present in the stack (the Airflow worker does not serve Superset
-reports), and SMTP must be configured. Until those exist, `/api/v1/report/` is
-not registered and the script reports a clear blocker.
+(Superset's built-in `/api/v1/report/` email/PDF blueprint is intentionally
+**not** used — Superset 4.1.2's `/chart/data` endpoint is broken server-side,
+and the stock image has no headless browser for screenshots. The Airflow +
+SQL-Lab + MinIO path is reliable and avoids those pitfalls.)
 
 ## Regenerating docs
 

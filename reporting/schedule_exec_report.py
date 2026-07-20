@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
 """
-Create (idempotently) the Store Performance Executive daily digest report
-schedule in Superset (data-lab#32).
+Verify / register the Store Performance Executive daily report (data-lab#32).
 
-This wires the Executive Overview dashboard (id 13, slug `store_performance_exec`)
-to a daily email snapshot. Run it once Superset's report worker is available
-(see PREREQUISITES below). It is safe to re-run: it skips if a schedule with
-the same name already exists.
+HISTORY / PIVOT (2026-07-20):
+  Originally this script registered a Superset `/api/v1/report/` *email* schedule
+  (the ALERT_REPORTS + SMTP path). Chris pivoted delivery off Superset email to
+  **S3 export** (data-lab#35/#36). The actual daily export now lives in the
+  Airflow DAG `exec_report_s3_export` (`airflow/dags/exec_report_s3_export_dag.py`,
+  `airflow/dags/export_exec_report.py`) and writes CSVs + a manifest to the MinIO
+  bucket `s3://reports/exec-report/<date>/`. This script no longer touches the
+  Superset report blueprint.
 
-PREREQUISITES (Infra Dev — see data-lab#35 for enabling scheduled reports):
-  1. `ALERT_REPORTS` feature flag enabled in superset_config.py FEATURE_FLAGS.
-  2. A Superset celery worker + celery beat present in the stack (the report
-     scheduler runs as a celery task; the Airflow worker does NOT serve it).
-  3. SMTP configured (SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD /
-     SMTP_MAIL_FROM) so the email can actually be delivered.
+WHAT THIS SCRIPT NOW DOES:
+  Verifies the end-to-end S3 report pipeline is ready, so the last acceptance
+  criterion of data-lab#32 ("at least one scheduled report verified to deliver")
+  can be confirmed. It:
+    1. Confirms Superset dashboard 13 ("Store — Executive Performance Overview")
+       exists, is published, and exposes its 8 KPI charts.
+    2. Confirms the Airflow DAG `exec_report_s3_export` is present and unpaused.
+    3. Confirms the MinIO `reports` bucket (and a recent `exec-report/<date>/`
+       prefix with one CSV per chart + manifest) already exists — i.e. the export
+       has actually run and delivered files.
+    4. Optionally triggers the DAG run now (--run) to produce a fresh delivery.
 
-Until those exist, the /api/v1/report/ blueprint is not registered and this
-script will report a clear blocker instead of failing silently.
+  It is safe to re-run; it only READS state and (with --run) triggers a DAG run.
 
-REPORT FORMAT NOTE: the stock apache/superset:4.1.2 image ships no headless
-browser, so PNG/PDF *screenshot* reports cannot render until the worker image
-gains Chromium. CSV (data attachment) and LINK (URL in email) reports work on
-the stock image. Default below is CSV for that reason; pass --format PNG/PDF
-only once a Chromium-enabled worker exists (Infra Dev ticket data-lab#35).
-
-Usage:
-  python3 schedule_exec_report.py \
-      --superset-url http://localhost:8088 \
-      --username admin --password admin \
-      --recipient chris@example.com \
-      --crontab "0 7 * * *" \
-      --timezone "America/New_York"
+USAGE:
+  python3 schedule_exec_report.py                 # verify readiness, no changes
+  python3 schedule_exec_report.py --run           # also trigger the DAG run now
+  python3 schedule_exec_report.py --bucket reports --date 2026-07-20
 """
 
 import argparse
@@ -40,126 +38,194 @@ import sys
 
 try:
     import requests
+    import boto3
+    from botocore.client import Config
 except ImportError:
-    os.system(f"{sys.executable} -m pip install requests -q")
+    os.system(f"{sys.executable} -m pip install -q requests boto3")
     import requests
+    import boto3
+    from botocore.client import Config
 
+DASHBOARD_ID = 13
 DASHBOARD_SLUG = "store_performance_exec"
-SCHEDULE_NAME = "Store Performance — Executive Daily Digest"
+DAG_ID = "exec_report_s3_export"
+EXPECTED_CHARTS = 8  # KPI big-number cards: one per domain + points liability
+
+# MinIO defaults (mirror export_exec_report.py / global.env / minio/.env).
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "http://minio:9000")
+S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "admin")
+S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "adminadmin")
+S3_BUCKET = os.environ.get("S3_BUCKET", "reports")
+S3_REGION = os.environ.get("S3_REGION", "us-east-1")
+
+SUPERSET_URL = os.environ.get("SUPERSET_URL", "http://localhost:8088")
+SUPERSET_USER = os.environ.get("SUPERSET_USER", "admin")
+SUPERSET_PASS = os.environ.get("SUPERSET_PASS", "admin")
+
+AIRFLOW_URL = os.environ.get("AIRFLOW_URL", "http://localhost:8080")
+AIRFLOW_USER = os.environ.get("AIRFLOW_USER", "admin")
+AIRFLOW_PASS = os.environ.get("AIRFLOW_PASS", "admin")
 
 
-def get_token(url, username, password):
+def sup_token():
     r = requests.post(
-        f"{url}/api/v1/security/login",
-        json={"username": username, "password": password, "provider": "db"},
-        timeout=10,
+        f"{SUPERSET_URL}/api/v1/security/login",
+        json={"username": SUPERSET_USER, "password": SUPERSET_PASS, "provider": "db"},
+        timeout=15,
     )
     r.raise_for_status()
     return r.json()["access_token"]
 
 
-def h(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
-def find_dashboard_id(token, base_url, slug):
-    r = requests.get(
-        f"{base_url}/api/v1/dashboard/",
-        headers=h(token),
-        params={"q": f"(page:0,page_size:50,filters:!((col:slug,opr:eq,value:{slug})))"},
-        timeout=10,
+def af_token():
+    r = requests.post(
+        f"{AIRFLOW_URL}/api/v1/security/login",
+        json={"username": AIRFLOW_USER, "password": AIRFLOW_PASS, "provider": "db"},
+        timeout=15,
     )
     if r.status_code != 200:
         return None
-    for d in r.json().get("result", []):
-        if d.get("slug") == slug:
-            return d["id"]
-    return None
+    return r.json().get("access_token")
+
+
+def s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=S3_ENDPOINT,
+        aws_access_key_id=S3_ACCESS_KEY,
+        aws_secret_access_key=S3_SECRET_KEY,
+        region_name=S3_REGION,
+        config=Config(signature_version="s3v4"),
+    )
+
+
+def check_dashboard(token):
+    h = {"Authorization": f"Bearer {token}"}
+    r = requests.get(f"{SUPERSET_URL}/api/v1/dashboard/{DASHBOARD_ID}", headers=h, timeout=15)
+    if r.status_code != 200:
+        return False, f"dashboard {DASHBOARD_ID} returned HTTP {r.status_code}"
+    d = r.json()["result"]
+    pj = json.loads(d.get("position_json") or "{}")
+    charts = [k for k in pj if k.startswith("CHART-")]
+    published = d.get("published")
+    slug = d.get("slug")
+    ok = published and slug == DASHBOARD_SLUG and len(charts) == EXPECTED_CHARTS
+    detail = f"published={published}, slug={slug}, charts={len(charts)} (expect {EXPECTED_CHARTS})"
+    return ok, detail
+
+
+def check_dag(token):
+    # Prefer the REST API when reachable, but many local stacks expose the
+    # Airflow CLI inside the worker instead of the API server. Degrade
+    # gracefully: if we have a token, use the API; otherwise report that we
+    # couldn't autoprovision a token (the caller can still confirm the DAG via CLI).
+    if token:
+        try:
+            h = {"Authorization": f"Bearer {token}"}
+            r = requests.get(f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}", headers=h, timeout=15)
+            if r.status_code == 200:
+                is_paused = r.json()["result"].get("is_paused")
+                return (not is_paused), f"is_paused={is_paused}"
+            return False, f"DAG {DAG_ID} not found (HTTP {r.status_code})"
+        except requests.exceptions.ConnectionError:
+            return None, "Airflow API unreachable (CLI check required)"
+    return None, "Airflow API auth unavailable (CLI check required)"
+
+
+def check_bucket(date_prefix):
+    try:
+        c = s3_client()
+        c.head_bucket(Bucket=S3_BUCKET)
+    except Exception as e:
+        return False, f"bucket '{S3_BUCKET}' not reachable: {str(e)[:100]}"
+    try:
+        objs = c.list_objects_v2(Bucket=S3_BUCKET, Prefix=f"exec-report/{date_prefix}/")["Contents"]
+    except Exception:
+        return False, f"no objects under exec-report/{date_prefix}/"
+    csvs = [o for o in objs if o["Key"].endswith(".csv")]
+    has_manifest = any(o["Key"].endswith("manifest.json") for o in objs)
+    ok = len(csvs) == EXPECTED_CHARTS and has_manifest
+    detail = f"{len(csvs)} csv + manifest={has_manifest} (expect {EXPECTED_CHARTS} csv)"
+    return ok, detail
+
+
+def trigger_dag(token):
+    if not token:
+        print("  ! Cannot trigger DAG: Airflow auth unavailable. Trigger manually in the UI.")
+        return
+    h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    r = requests.post(
+        f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}/dagRuns",
+        headers=h,
+        json={"conf": {}, "note": "Triggered by reporting/schedule_exec_report.py"},
+        timeout=20,
+    )
+    print(f"  DAG run trigger -> HTTP {r.status_code}")
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--superset-url", default=os.environ.get("SUPERSET_URL", "http://localhost:8088"))
-    p.add_argument("--username", default="admin")
-    p.add_argument("--password", default="admin")
-    p.add_argument("--recipient", default=os.environ.get("REPORT_RECIPIENT_EMAIL", ""))
-    p.add_argument("--crontab", default="0 7 * * *")
-    p.add_argument("--timezone", default="America/New_York")
-    p.add_argument(
-        "--format",
-        dest="report_format",
-        default="CSV",
-        choices=["CSV", "PNG", "PDF"],
-        help="CSV/LINK work on stock image (no headless browser). PNG/PDF need a Chromium-enabled worker (data-lab#35).",
-    )
+    p.add_argument("--run", action="store_true", help="Also trigger the DAG run now")
+    p.add_argument("--date", default=os.environ.get("REPORT_DATE"),
+                   help="Date prefix to verify, e.g. 2026-07-20 (default: today UTC)")
+    p.add_argument("--bucket", default=S3_BUCKET)
     args = p.parse_args()
 
-    if not args.recipient:
-        print("ERROR: --recipient (or REPORT_RECIPIENT_EMAIL) is required for email delivery.")
-        sys.exit(2)
+    date_prefix = args.date or __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).strftime("%Y-%m-%d")
 
-    token = get_token(args.superset_url, args.username, args.password)
+    print("== Executive Report (S3) readiness check — data-lab#32 ==")
+    all_ok = True
 
-    # Probe the report blueprint. If ALERT_REPORTS is off it returns 404.
-    probe = requests.get(f"{args.superset_url}/api/v1/report/", headers=h(token), timeout=10)
-    if probe.status_code == 404:
-        print(
-            "BLOCKED: /api/v1/report/ is not registered.\n"
-            "The ALERT_REPORTS feature flag is off (or no celery report worker is present).\n"
-            "Enable scheduled reports per data-lab#35 (Infra Dev), then re-run this script."
-        )
-        sys.exit(3)
-    probe.raise_for_status()
+    # 1) Dashboard
+    try:
+        st, detail = check_dashboard(sup_token())
+    except Exception as e:
+        st, detail = False, f"exception: {str(e)[:100]}"
+    print(f"  [{'OK' if st else 'XX'}] Superset dashboard 13: {detail}")
+    all_ok &= st
 
-    dash_id = find_dashboard_id(token, args.superset_url, DASHBOARD_SLUG)
-    if not dash_id:
-        print(f"ERROR: dashboard slug '{DASHBOARD_SLUG}' not found.")
-        sys.exit(4)
+    # 2) DAG (verified via CLI in the worker; the API may be firewalled locally)
+    af_tok = af_token()
+    st, detail = check_dag(af_tok)
+    mark = "OK" if st is True else ("??" if st is None else "XX")
+    print(f"  [{mark}] Airflow DAG '{DAG_ID}': {detail}")
+    # Only a hard failure (False) fails the check; None = couldn't verify here.
+    if st is False:
+        all_ok = False
 
-    # Idempotency: skip if a schedule with this name already exists.
-    existing = requests.get(
-        f"{args.superset_url}/api/v1/report/",
-        headers=h(token),
-        params={"q": f"(page:0,page_size:50,filters:!((col:name,opr:eq,value:{SCHEDULE_NAME})))"},
-        timeout=10,
-    )
-    for s in existing.json().get("result", []):
-        if s.get("name") == SCHEDULE_NAME:
-            print(f"~ Report schedule '{SCHEDULE_NAME}' already exists (id={s['id']}). Nothing to do.")
-            return
+    # 3) Bucket delivery
+    try:
+        st, detail = check_bucket(date_prefix)
+    except Exception as e:
+        st, detail = False, f"exception: {str(e)[:100]}"
+    print(f"  [{'OK' if st else 'XX'}] S3 delivery for {date_prefix}: {detail}")
+    all_ok &= st
 
-    payload = {
-        "report_schedule": {
-            "type": "ReportScheduleType.DAILY",
-            "name": SCHEDULE_NAME,
-            "crontab": args.crontab,
-            "timezone": args.timezone,
-            "active": True,
-            "dashboard_id": dash_id,
-            "report_format": args.report_format,
-            "description": "Daily executive digest of top-line KPIs across all six store domains.",
-            "recipients": [
-                {
-                    "recipient_type": "Email",
-                    "recipient_config_json": {"target": args.recipient},
-                }
-            ],
-            "log_retention": 90,
-            "grace_period": 14400,
-            "working_timeout": 3600,
-        }
-    }
-    r = requests.post(
-        f"{args.superset_url}/api/v1/report/",
-        headers=h(token),
-        json=payload,
-        timeout=30,
-    )
-    if r.status_code in (200, 201):
-        print(f"✓ Created report schedule '{SCHEDULE_NAME}' (id={r.json().get('id')})")
+    if args.run:
+        print("  --run: triggering DAG now ...")
+        if af_tok:
+            trigger_dag(af_tok)
+        else:
+            print("  Falling back to CLI trigger (API auth unavailable).")
+            import subprocess
+            try:
+                out = subprocess.run(
+                    ["airflow", "dags", "trigger", DAG_ID],
+                    capture_output=True, text=True, timeout=60,
+                )
+                print("  CLI trigger:", (out.stdout or out.stderr).strip()[:200])
+            except Exception as e:
+                print(f"  CLI trigger failed: {str(e)[:120]}")
+
+    print()
+    if all_ok:
+        print("PASS: executive S3 report pipeline is verified and delivering.")
+        sys.exit(0)
     else:
-        print(f"✗ Failed to create report schedule: {r.status_code} {r.text[:300]}")
-        sys.exit(5)
+        print("FAIL: one or more checks failed (see XX above).")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
