@@ -3,13 +3,14 @@
 -- Grain: one row per load_id.
 -- Source: stg_transport_loads, stg_transport_trucks, stg_locations (x2), stg_employees.
 --
--- Cost note (data-lab#30): Verisim carries NO fuel / distance / cost columns. The only
--- real cost signal is the driver hourly_rate (stg_employees). estimated_labor_cost below
--- is driver_rate * hours_in_transit -- a LABOR-ONLY proxy. True cost-per-mile requires
--- route distance, which is not in the source; that metric is intentionally omitted (not
--- fabricated). Extend with a rates seed + geocoded distance to add fuel cost later.
+-- Updated (data-lab#47 / Verisim#13): now carries distance_miles and route_cost.
+-- route_cost = distance_miles * cost_per_mile (default 1.85, configurable via
+-- dbt var 'transport_cost_per_mile'). estimated_labor_cost is retained alongside
+-- for transparency.
 
 {{ config(materialized='table') }}
+
+{% set cost_per_mile = var('transport_cost_per_mile', 1.85) %}
 
 with loads as (
     select * from {{ ref('stg_transport_loads') }}
@@ -65,7 +66,13 @@ joined as (
         l.status,
         l.hours_in_transit,
         l.load_date,
-        l.hours_in_transit * d.hourly_rate as estimated_labor_cost
+        l.distance_miles,
+        l.hours_in_transit * d.hourly_rate as estimated_labor_cost,
+        case
+            when l.distance_miles is not null and l.distance_miles > 0
+            then round(l.distance_miles * {{ cost_per_mile }}, 2)
+            else null
+        end as route_cost
     from loads l
     left join trucks t on t.truck_id = l.truck_id
     left join warehouse w on w.location_id = l.warehouse_location_id

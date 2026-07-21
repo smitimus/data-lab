@@ -21,6 +21,7 @@ renamed as (
                 then extract(epoch from (arrived_at::timestamptz - departed_at::timestamptz)) / 3600.0
         end                                     as hours_in_transit,
         coalesce(arrived_at, departed_at)::date as load_date,
+        distance_miles::numeric                 as distance_miles,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

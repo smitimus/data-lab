@@ -1,8 +1,10 @@
 -- Route efficiency by warehouse -> store route.
 -- Grain: one row per route_key (warehouse_location_id -> destination_location_id).
 --
--- Cost note: estimated_route_cost_labor = SUM(driver hourly_rate * hours_in_transit).
--- No distance / fuel data in source; cost-per-mile is intentionally omitted (not fabricated).
+-- Updated (data-lab#47 / Verisim#13): now includes real cost-per-mile and route_cost.
+-- cost_per_mile = sum(route_cost) / sum(distance_miles) for the route.
+-- route_cost = distance_miles * 1.85 (configurable via dbt var transport_cost_per_mile).
+-- estimated_route_cost_labor = SUM(driver hourly_rate * hours_in_transit) retained.
 
 {{ config(materialized='table') }}
 
@@ -26,6 +28,13 @@ aggregated as (
         avg(hours_in_transit)                                              as avg_transit_hours,
         sum(hours_in_transit)                                              as total_transit_hours,
         sum(estimated_labor_cost)                                          as estimated_route_cost_labor,
+        sum(distance_miles)                                                as total_distance_miles,
+        sum(route_cost)                                                    as total_route_cost,
+        case
+            when sum(distance_miles) > 0
+            then round(sum(route_cost) / sum(distance_miles), 2)
+            else null
+        end                                                                as avg_cost_per_mile,
         round(
             count(*) filter (
                 where arrived_at is not null and departed_at is not null

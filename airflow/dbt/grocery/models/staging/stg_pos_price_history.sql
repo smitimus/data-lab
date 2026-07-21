@@ -5,8 +5,7 @@ with source as (
 renamed as (
     select
         price_history_id,
-        product_name,
-        category,
+        product_id,
         old_price::numeric                      as old_price,
         new_price::numeric                      as new_price,
         changed_at::timestamptz                 as changed_at,
