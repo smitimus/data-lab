@@ -12,17 +12,17 @@
 | Path | Purpose |
 |------|---------|
 | `/opt/data-lab/<service>/` | Deploy configs — compose.yaml, .env.example, README |
-| `/opt/conf/<service>/` | Runtime data — config files, databases, logs. Seeded by init.sh |
+| `/opt/data-lab/_conf/<service>/` | Runtime data — config files, databases, logs. Seeded by init.sh |
 
 **Self-contained stacks** (source mounted into container): airflow, postgres, verisim-grocery
-**Seeded stacks** (init.sh copies stacks/ → conf/): superset, cloudbeaver, homepage
+**Seeded stacks** (init.sh copies stacks/ → _conf/): superset, cloudbeaver, homepage
 
 ## Stack Lifecycle
 
 From `/opt/data-lab/`:
 
 ```bash
-bash init.sh    # seed conf/ from stacks/
+bash init.sh    # seed _conf/ from stacks/
 bash start.sh   # start all stacks (dependency order)
 bash stop.sh    # stop in reverse order
 bash setup.sh   # first-time only: adopt stacks in Dockhand
@@ -258,13 +258,13 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v Exited
 
 1. Write `RESTORE.md` in the stack dir
 2. `docker compose down`
-3. `mv stacks/<name> archive/stacks/<name>` and `mv conf/<name> archive/conf/<name>`
+3. `mv stacks/<name> archive/stacks/<name>` and `mv _conf/<name> archive/_conf/<name>`
 4. Remove from: start.sh, stop.sh, init.sh (wipe-check list + mkdir + seed section), setup.sh
 5. Update AGENTS.md active stacks list
 
 ## Init.sh Service Whitelist
 
-init.sh only seeds conf/ for these 6 services (hardcoded in the script):
+init.sh only seeds _conf/ for these 6 services (hardcoded in the script):
 
 ```
 superset cloudbeaver homepage postgres airflow verisim-grocery

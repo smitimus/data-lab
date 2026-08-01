@@ -16,6 +16,8 @@ renamed as (
         store_sqft::int                         as store_sqft,
         num_aisles::int                         as num_aisles,
         is_active::boolean                      as is_active,
+        latitude::numeric                       as latitude,
+        longitude::numeric                      as longitude,
         _sdc_extracted_at                       as _extracted_at
     from source
 )

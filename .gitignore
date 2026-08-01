@@ -2,7 +2,7 @@
 **/.env
 
 # Runtime data
-conf/
+_conf/
 .meltano/
 logs/
 

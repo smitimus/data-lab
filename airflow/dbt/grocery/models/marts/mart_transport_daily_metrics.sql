@@ -1,5 +1,8 @@
--- Daily transport ops metrics by warehouse
--- Grain: one row per (load_date, warehouse_location_id)
+-- Daily transport ops metrics by warehouse, with estimated labor cost.
+-- Grain: one row per (load_date, warehouse_location_id).
+--
+-- Cost note (data-lab#30): estimated_labor_cost is a LABOR-ONLY proxy (driver hourly_rate
+-- * hours_in_transit). Verisim carries no fuel / distance / cost columns.
 
 with loads as (
     select * from {{ ref('stg_transport_loads') }}
@@ -9,6 +12,15 @@ locations as (
     select location_id, location_name, location_type
     from {{ ref('stg_locations') }}
     where location_type = 'warehouse'
+),
+
+daily_cost as (
+    select
+        load_date,
+        warehouse_location_id,
+        sum(estimated_labor_cost) as total_estimated_labor_cost
+    from {{ ref('int_transport_enriched') }}
+    group by load_date, warehouse_location_id
 ),
 
 aggregated as (
@@ -33,16 +45,20 @@ aggregated as (
 
 final as (
     select
-        *,
+        a.*,
+        dc.total_estimated_labor_cost,
         case
-            when completed_loads > 0
-                then round(on_time_loads * 100.0 / completed_loads, 1)
+            when a.completed_loads > 0
+                then round(a.on_time_loads * 100.0 / a.completed_loads, 1)
         end                                                   as on_time_rate_pct,
         case
-            when total_loads > 0
-                then round(completed_loads * 100.0 / total_loads, 1)
+            when a.total_loads > 0
+                then round(a.completed_loads * 100.0 / a.total_loads, 1)
         end                                                   as completion_rate_pct
-    from aggregated
+    from aggregated a
+    left join daily_cost dc
+        on dc.load_date = a.load_date
+       and dc.warehouse_location_id = a.warehouse_location_id
 )
 
 select * from final

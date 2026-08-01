@@ -1,4 +1,6 @@
 -- Loyalty program: member tier distribution, point accumulation, tier upgrade activity
+-- Grain: one row per member_id (PK). Source: stg_pos_loyalty_members,
+-- stg_pos_loyalty_point_transactions, stg_pos_transactions.
 with members as (
     select * from {{ ref('stg_pos_loyalty_members') }}
 ),

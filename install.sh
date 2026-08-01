@@ -13,7 +13,7 @@ set -euo pipefail
 #   5.  Generate secrets (Fernet, JWT, Superset key, Dockhand key)
 #   6.  Generate all .env files from .env.example templates
 #   7.  Run global-env-sync.py to propagate globals
-#   8.  Run init.sh (seed conf/ dirs)
+#   8.  Run init.sh (seed _conf/ dirs)
 #   9.  Run start.sh (bring up all stacks)
 #   10. Wait for Dockhand, then auto-adopt all stacks
 #   11. Launch background job: wait for Superset, then auto-import dashboards
@@ -350,12 +350,12 @@ main() {
   # TZ_VAL:     system timezone from /etc/timezone, propagated to containers.
   # DOCKER_GID: numeric GID of the docker group.  Containers that mount
   #             /var/run/docker.sock need to run as this GID to access it.
-  # CONF_DIR:   runtime data directory — always a sibling of the repo dir
-  #             (e.g. repo at /opt/data-lab → conf at /opt/conf).
+  # CONF_DIR:   runtime data directory — inside the repo dir (repo/_conf)
+  #             (e.g. repo at /opt/data-lab → conf at /opt/data-lab/_conf).
   IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}') || IP="127.0.0.1"
   TZ_VAL=$(cat /etc/timezone 2>/dev/null | head -1) || TZ_VAL="America/New_York"
   DOCKER_GID=$(getent group docker | cut -d: -f3) || DOCKER_GID="999"
-  CONF_DIR="$(dirname "$INSTALL_DIR")/conf"
+  CONF_DIR="$INSTALL_DIR/_conf"
   log "Detected IP: ${IP}, Timezone: ${TZ_VAL}, Docker GID: ${DOCKER_GID}"
 
   # --- Generate secrets ----------------------------------------------------
@@ -407,11 +407,11 @@ main() {
   log "Syncing global env vars..."
   python3 global-env-sync.py
 
-  # --- Seed conf/ and start stacks -----------------------------------------
+  # --- Seed _conf/ and start stacks -----------------------------------------
   # init.sh creates all runtime directories under CONF_DIR and copies seed
   # config files (superset_config.py, meltano.yml, etc.) into place so
   # containers have their initial configuration on first boot.
-  log "Seeding conf/ directories..."
+  log "Seeding _conf/ directories..."
   bash init.sh
 
   # start.sh brings up every Docker Compose stack in the correct dependency

@@ -15,7 +15,7 @@ Web-based database IDE (DBeaver in a browser). Pre-configured with connections t
 - **Airflow metadata** — `postgres:5432/airflow` (postgres/postgres)
 
 ## Key Config Files
-- `conf/cloudbeaver/GlobalConfiguration/` — connection definitions (seeded from `stacks/cloudbeaver/data-sources.json` by `init.sh`)
+- `_conf/cloudbeaver/GlobalConfiguration/` — connection definitions (seeded from `stacks/cloudbeaver/data-sources.json` by `init.sh`)
 
 ## Usage Notes
 - **Admin credentials:** `admin` / `admin` (set via `CB_ADMIN_NAME` and `CB_ADMIN_PASSWORD` in compose.yaml)

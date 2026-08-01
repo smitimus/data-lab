@@ -88,6 +88,17 @@ final as (
         l.driver                                    as driver_name,
         l.load_date,
         case
+            when l.arrived_at is not null and o.requested_delivery_dt is not null
+                then l.arrived_at::date <= o.requested_delivery_dt
+            else null
+        end                                         as on_time,
+        case
+            when l.arrived_at is not null and o.requested_delivery_dt is not null
+                then greatest(0,
+                    extract(epoch from (l.arrived_at::timestamp - o.requested_delivery_dt::timestamp)) / 86400.0)
+            else null
+        end                                         as days_late,
+        case
             when f.fulfillment_completed_at is not null and o.order_dt is not null
                 then round(
                     extract(epoch from (f.fulfillment_completed_at - o.order_dt)) / 86400.0,

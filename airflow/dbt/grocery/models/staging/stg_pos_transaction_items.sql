@@ -20,7 +20,9 @@ renamed as (
         s.unit_price::numeric                           as unit_price,
         s.discount::numeric                             as discount,
         (s.unit_price::numeric - s.discount::numeric) * s.quantity::numeric as line_total,
-        s.transaction_dt::timestamptz                   as transaction_dt
+        s.transaction_dt::timestamptz                   as transaction_dt,
+        s.coupon_id,
+        s.deal_id
     from source s
     left join products p on p.product_id = s.product_id
 )

@@ -154,7 +154,7 @@ Each service has its own README with access details, config files, and usage not
 ```bash
 bash start.sh              # start all stacks
 bash stop.sh               # stop all stacks
-bash init.sh               # reseed conf/ (prompts to wipe)
+bash init.sh               # reseed _conf/ (prompts to wipe)
 bash setup.sh              # adopt stacks in Dockhand (first-time)
 python3 global-env-sync.py # sync global.env changes to all .env files
 ```
@@ -162,7 +162,7 @@ python3 global-env-sync.py # sync global.env changes to all .env files
 Reset a single stack:
 ```bash
 cd stacks/<service> && docker compose down
-rm -rf conf/<service>
+rm -rf _conf/<service>
 # re-run init.sh or manually reseed, then:
 cd stacks/<service> && docker compose up -d
 ```
