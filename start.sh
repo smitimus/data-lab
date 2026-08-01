@@ -2,18 +2,41 @@
 # =============================================================================
 # Start all stacks in dependency order.
 # Run init.sh first on a fresh machine to seed _conf/.
+#
+# Usage:
+#   bash start.sh [--continue-on-error] [--help]
+#
+#   --continue-on-error  Log failures and continue to remaining stacks.
+#                        Exits 1 at end if any stack failed.
+#   --help / -h          Print this usage text.
 # =============================================================================
 
-# Exit immediately if any command fails, so a broken stack doesn't silently
-# let the rest of the sequence start against a broken dependency.
-set -e
+# ---- Flag parsing -----------------------------------------------------------
+CONTINUE_ON_ERROR=false
+for arg in "$@"; do
+    case "$arg" in
+        --continue-on-error) CONTINUE_ON_ERROR=true ;;
+        --help|-h)
+            head -11 "$0" | tail -8 | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "Unknown flag: $arg" >&2
+            echo "Usage: bash start.sh [--continue-on-error] [--help]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 # Resolve the repo root from this script's own location.
 # This ensures the script works whether the repo is at /opt/stacks,
 # /opt/data-lab, or any other path.
 STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# start NAME [build] — brings up a single Docker Compose stack.
+# Track failures so we can report at the end.
+FAILURES=0
+
+# start_or_fail NAME [build] — brings up a single Docker Compose stack.
 #
 # If "build" is passed as the second argument, the local image is rebuilt
 # before starting.  This is used for stacks (like Airflow) that have a
@@ -21,21 +44,33 @@ STACKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #
 # `docker compose up -d` starts containers in detached mode so the terminal
 # is not blocked waiting for container output.
-start() {
+#
+# Exits immediately on failure unless --continue-on-error is set, in which
+# case it logs a warning, increments the failure counter, and returns.
+start_or_fail() {
     local name=$1
     local build=${2:-}
-    local dir=$STACKS/$name
+    local dir="$STACKS/$name"
     echo ""
     echo "--- $name ---"
     if [ "$build" = "build" ]; then
-        docker compose -f $dir/compose.yaml build --quiet
+        docker compose -f "$dir/compose.yaml" build --quiet
     else
         # Pull images via `docker pull` (not `docker compose pull`) — compose pull
         # deadlocks silently on fresh machines, while docker pull is reliable.
-        docker compose -f $dir/compose.yaml config --images 2>/dev/null \
+        docker compose -f "$dir/compose.yaml" config --images 2>/dev/null \
             | xargs -r -n1 docker pull
     fi
-    docker compose -f $dir/compose.yaml up -d
+    if docker compose -f "$dir/compose.yaml" up -d; then
+        return 0
+    fi
+    local rc=$?
+    if $CONTINUE_ON_ERROR; then
+        echo "WARNING: $name failed to start (exit $rc) — continuing" >&2
+        FAILURES=$((FAILURES + 1))
+        return 0
+    fi
+    exit $rc
 }
 
 echo "=== Starting all stacks ==="
@@ -43,12 +78,12 @@ echo "=== Starting all stacks ==="
 # 1. Dockhand — Docker management UI.
 #    Has no dependencies on other stacks; starts first so it is available
 #    for monitoring while everything else comes up.
-start dockhand
+start_or_fail dockhand
 
 # 2. Homepage — service dashboard / landing page.
 #    Reads Docker labels dynamically at request time, so it's useful immediately
 #    and shows tiles as each service comes up. No dependencies on other stacks.
-start homepage
+start_or_fail homepage
 
 # 3. Postgres — shared EDW (Enterprise Data Warehouse) database.
 #    Everything that stores persistent relational data depends on this:
@@ -57,7 +92,7 @@ start homepage
 #    The 30-second sleep gives postgres time to finish running its init
 #    SQL scripts (creates airflow, superset, grocery databases) and begin
 #    accepting connections before the dependent stacks try to connect.
-start postgres
+start_or_fail postgres
 echo "  Waiting 30s for postgres to initialize..."
 sleep 30
 
@@ -65,14 +100,14 @@ sleep 30
 #    All-in-one container (postgres + API + UI + generator).  Uses its own
 #    internal postgres on port 5499 as the data source; independent of the
 #    shared EDW postgres.
-start verisim-grocery
+start_or_fail verisim-grocery
 
 # 5. Airflow — workflow orchestrator.
 #    Runs grocery_ingest_api (API → EDW raw), grocery_dbt (dbt transform),
 #    and grocery_complete_pipeline (both in sequence).
 #    Built locally because the image includes dbt and its dependencies.
 #    Runs DB migrations on first start (1-2 minutes).
-start airflow build
+start_or_fail airflow build
 
 # 7. Superset — BI dashboards.
 #    The superset-init container runs database migrations and creates the
@@ -80,24 +115,29 @@ start airflow build
 #    (role/permission sync) takes ~10-15 minutes — this is normal.
 #    The main superset container waits for superset-init to finish before
 #    accepting HTTP requests.
-start superset
+start_or_fail superset
 
 # 8. CloudBeaver — web-based database GUI.
 #    Pre-configured with connections to the EDW and Verisim source DB.
 #    No hard startup dependencies on other stacks.
-start cloudbeaver
+start_or_fail cloudbeaver
 
 # 9. dbt Docs — lightweight data catalog for dbt-managed models.
 #    Generates the dbt docs site (model lineage, columns, tests) and serves it.
 #    Started after airflow so the dbt project files are stable; needs postgres_network.
-start dbt-docs
+start_or_fail dbt-docs
 
 # 10. MinIO — S3-compatible object storage (data-lab#35 report export target).
 #     Standalone; joins postgres_network so airflow-worker reaches it at
 #     http://minio:9000. The export DAG uploads executive-report CSVs here.
-start minio
+start_or_fail minio
 
 echo ""
+if [ "$FAILURES" -gt 0 ]; then
+    echo "=== $FAILURES stack(s) failed to start ==="
+    echo ""
+    exit 1
+fi
 echo "=== All stacks started ==="
 echo ""
 echo "Notes:"
