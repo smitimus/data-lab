@@ -209,7 +209,7 @@ models:
     columns:
       - name: price_history_id
         tests: [unique, not_null]
-      - name: product_id
+      - name: product_name
         tests: [not_null]
 
   - name: stg_pos_coupons
