@@ -1,12 +1,5 @@
 # AGENTS.md — Data Lab Analytics Stack
 
-## Environment Naming
-
-| Name | Machine | Purpose |
-|------|---------|---------|
-| **dev** | This machine (`/opt/data-lab`) | Active development |
-| **test** | testvm (192.168.1.6) | Clean install validation |
-
 ## Directory Layout
 
 | Path | Purpose |
@@ -142,6 +135,8 @@ The dbt staging layer expects these 27 source tables from Verisim's generator:
 **If a Verisim schema changes** (new column, renamed table), update the matching staging model in `/opt/data-lab/airflow/dbt/grocery/models/staging/` and the source definitions in `sources.yml`.
 
 ## Grocery Data Model — Non-Obvious Business Logic
+
+These details come from the Verisim generator but are essential for dbt model work in this repo.
 
 - **Transaction total**: `total = subtotal + tax - coupon_savings - deal_savings`
 - **Line item total**: `line_total = (unit_price - discount) * quantity` — discount is per-unit
