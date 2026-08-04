@@ -47,7 +47,8 @@ select
     sum(s.quantity_on_hand * coalesce(p.unit_cost, 0))::numeric(14,2)
                                                                  as value_on_hand_cost,
     sum(s.quantity_available * coalesce(p.unit_cost, 0))::numeric(14,2)
-                                                                 as value_available_cost
+                                                                 as value_available_cost,
+    current_date                                             as as_of_date
 from stock s
 left join products p  on p.product_id  = s.product_id
 left join locations l on l.location_id = s.location_id

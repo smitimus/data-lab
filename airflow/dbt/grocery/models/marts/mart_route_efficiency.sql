@@ -52,5 +52,8 @@ aggregated as (
         store_name, store_city, store_state
 )
 
-select * from aggregated
+select
+    *,
+    current_date as as_of_date
+from aggregated
 order by total_loads desc

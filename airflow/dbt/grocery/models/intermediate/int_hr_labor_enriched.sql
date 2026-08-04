@@ -32,18 +32,86 @@ with schedules as (
 ),
 
 attendance as (
+    -- Pivot timeclock events into in/out pairs per employee per day.
+    -- Computes clock_in_at, clock_out_at, total_clocked_hours, total_break_hours,
+    -- net_hours_worked, has_complete_pair, has_unpaired_events from raw events.
+    with paired as (
+        select
+            employee_id,
+            event_date,
+            location_id,
+            min(case when event_type = 'clock_in' then event_dt end)  as clock_in_at,
+            max(case when event_type = 'clock_out' then event_dt end) as clock_out_at,
+            count(distinct case when event_type = 'clock_in' then event_id end) as ins,
+            count(distinct case when event_type = 'clock_out' then event_id end) as outs
+        from {{ ref('stg_timeclock_events') }}
+        group by employee_id, event_date, location_id
+    ),
+    breaks as (
+        -- Sum each complete break_start/break_end pair per employee per day.
+        -- Pair each break_start with the next chronological break_end for the
+        -- same employee/day/location.
+        select
+            bs.employee_id,
+            bs.event_date,
+            bs.location_id,
+            sum(
+                extract(epoch from (be.break_end_dt - bs.break_start)) / 3600.0
+            ) as total_break_hours
+        from (
+            select
+                employee_id,
+                event_date,
+                location_id,
+                event_dt as break_start,
+                row_number() over (
+                    partition by employee_id, event_date, location_id
+                    order by event_dt
+                ) as rn
+            from {{ ref('stg_timeclock_events') }}
+            where event_type = 'break_start'
+        ) bs
+        join (
+            select
+                employee_id,
+                event_date,
+                location_id,
+                event_dt as break_end_dt,
+                row_number() over (
+                    partition by employee_id, event_date, location_id
+                    order by event_dt
+                ) as rn
+            from {{ ref('stg_timeclock_events') }}
+            where event_type = 'break_end'
+        ) be
+          on be.employee_id = bs.employee_id
+         and be.event_date   = bs.event_date
+         and be.location_id  = bs.location_id
+         and be.rn          = bs.rn
+        group by bs.employee_id, bs.event_date, bs.location_id
+    )
     select
-        employee_id,
-        event_date,
-        location_id,
-        clock_in_at,
-        clock_out_at,
-        total_clocked_hours,
-        total_break_hours,
-        net_hours_worked,
-        has_complete_pair,
-        has_unpaired_events
-    from {{ ref('mart_attendance_summary') }}
+        p.employee_id,
+        p.event_date,
+        p.location_id,
+        p.clock_in_at,
+        p.clock_out_at,
+        case
+            when p.clock_in_at is not null and p.clock_out_at is not null
+            then extract(epoch from (p.clock_out_at - p.clock_in_at)) / 3600.0
+        end as total_clocked_hours,
+        coalesce(b.total_break_hours, 0) as total_break_hours,
+        case
+            when p.clock_in_at is not null and p.clock_out_at is not null
+            then extract(epoch from (p.clock_out_at - p.clock_in_at)) / 3600.0
+        end as net_hours_worked,
+        (p.ins > 0 and p.outs > 0) as has_complete_pair,
+        (p.ins != p.outs) as has_unpaired_events
+    from paired p
+    left join breaks b
+      on b.employee_id = p.employee_id
+     and b.event_date   = p.event_date
+     and b.location_id  = p.location_id
 ),
 
 employees as (

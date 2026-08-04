@@ -1,6 +1,6 @@
-# dbt packages
-dbt-core
-dbt-postgres
+# dbt packages (pinned for cross-container compatibility with dbt-docs)
+dbt-core==1.11.12
+dbt-postgres==1.11.0
 dbt-metricflow
 
 # Airflow and data engineering packages

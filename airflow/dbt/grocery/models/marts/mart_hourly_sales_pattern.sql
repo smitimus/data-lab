@@ -66,7 +66,9 @@ select
     rank() over (
         partition by h.location_id
         order by h.total_revenue desc
-    )                                                as revenue_rank
+    )                                                as revenue_rank,
+    -- Snapshot date so the dataset has a valid temporal column for Superset
+    current_date                                     as as_of_date
 from hourly h
 join locations l on l.location_id = h.location_id
 order by h.location_id, h.day_of_week, h.hour_of_day

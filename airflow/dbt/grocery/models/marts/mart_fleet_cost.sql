@@ -35,5 +35,8 @@ aggregated as (
         driver_id, driver_name, hourly_rate
 )
 
-select * from aggregated
+select
+    *,
+    current_date as as_of_date
+from aggregated
 order by total_route_cost desc nulls last

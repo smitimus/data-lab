@@ -13,7 +13,7 @@ services:
     environment:
       TZ: ${TZ}
       CB_SERVER_NAME: "Data Lab"
-      CB_SERVER_URL: "http://192.168.1.4:8978/"
+      CB_SERVER_URL: "http://192.168.1.7:8978/"
       CB_ADMIN_NAME: "admin"
       CB_ADMIN_PASSWORD: "admin"
       # Relax password policy to allow simple "admin" password

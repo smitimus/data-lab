@@ -92,8 +92,9 @@ def set_main_dttm(token, base_url, ds_id, col):
         print(f"  ✗ Failed: {resp.status_code} {resp.text[:200]}")
 
 # ── Chart definitions ──────────────────────────────────────────────────────
-def build_chart_payload(ds_id, slice_name, viz_type, params_extra):
+def build_chart_payload(ds_id, slice_name, viz_type, params_extra, token=None, base_url=SUPERSET_URL):
     """Build a chart payload dict."""
+    from _superset_query_context import build_query_context
     base_params = {
         "datasource": f"{ds_id}__table",
         "viz_type": viz_type,
@@ -102,32 +103,74 @@ def build_chart_payload(ds_id, slice_name, viz_type, params_extra):
         "adhoc_filters": [],
     }
     base_params.update(params_extra)
+
+    # Charts on a temporal dataset need granularity_sqla in params (used by the
+    # legacy /superset/explore_json/ endpoint). Auto-resolve from main_dttm_col.
+    # Only inject for TIME-SERIES viz types; non-time-series charts (dist_bar,
+    # pie, big_number, table, ...) must NOT carry a temporal column or the legacy
+    # endpoint applies a broken rolling window ("Applied rolling window did not
+    # return any data").
+    NON_TIME_VIZ = {
+        "dist_bar", "pie", "big_number", "big_number_total", "table",
+        "word_cloud", "treemap", "sunburst", "sankey", "chord", "world_map",
+        "histogram", "box_plot", "heatmap", "rose", "funnel", "gauge",
+        "graph_chart", "mapbox", "deck_scatter", "deck_sandwich", "deck_path",
+        "deck_arc", "deck_grid", "deck_hex", "deck_geojson", "deck_polygon",
+        "paired_ttest", "rooted_ttest", "filter_box",
+    }
+    if (not base_params.get("granularity_sqla") and not base_params.get("granularity")
+            and token and viz_type not in NON_TIME_VIZ):
+        try:
+            r = requests.get(urljoin(base_url, f"/api/v1/dataset/{ds_id}"),
+                              headers=headers(token), timeout=10)
+            if r.status_code == 200:
+                dttm = r.json().get("result", {}).get("main_dttm_col")
+                if dttm:
+                    base_params["granularity_sqla"] = dttm
+        except Exception:
+            pass
+    
+    # Fix: pie and big_number charts expect singular "metric", not "metrics"
+    if viz_type in ("pie", "big_number_total", "big_number"):
+        if "metrics" in base_params and "metric" not in base_params:
+            val = base_params.pop("metrics")
+            if isinstance(val, list) and len(val) > 0:
+                base_params["metric"] = val[0]
+            elif isinstance(val, dict):
+                base_params["metric"] = val
+    
     return {
         "slice_name": slice_name,
         "viz_type": viz_type,
         "datasource_id": ds_id,
         "datasource_type": "table",
         "params": json.dumps(base_params),
+        "query_context": build_query_context(ds_id, base_params, token, base_url),
         "dashboards": [],
     }
 
 def make_metric(col, agg="SUM", label=None):
-    """Helper to create a metric dict."""
+    # Clean snake_case label so the SQL alias survives pandas postprocessing.
+    clean = label or f"{agg.lower()}_{col}"
     return {
         "expressionType": "SIMPLE",
         "column": {"column_name": col, "type": ""},
         "aggregate": agg,
-        "label": label or f"{agg}({col})",
+        "label": clean,
     }
 
 def make_filter(col, op, val, clause="WHERE"):
-    """Helper to create an adhoc filter."""
+    """Helper to create an adhoc filter with both old and new API formats."""
     return {
-        "expressionType": "SIMPLE",
+        # New API format (col, op, comparator)
+        "col": col,
+        "op": op,
+        "comparator": val,
+        # Old explore_json format (subject, operator, comparator, clause, expressionType)
         "subject": col,
         "operator": op,
-        "comparator": val,
         "clause": clause,
+        "expressionType": "SIMPLE",
     }
 
 CHARTS = [
@@ -312,6 +355,8 @@ def create_chart(token, base_url, chart_def, ds_ids):
         chart_def["slice_name"],
         chart_def["viz_type"],
         chart_def["params"],
+        token,
+        base_url,
     )
 
     resp = requests.post(urljoin(base_url, "/api/v1/chart/"),
@@ -326,6 +371,28 @@ def create_chart(token, base_url, chart_def, ds_ids):
     else:
         print(f"  ✗ Failed '{chart_def['slice_name']}': {resp.status_code} {resp.text[:300]}")
         return None
+
+def _link_charts(token, base_url, dash_id, chart_ids):
+    """Link charts to dashboard via the chart's dashboards relationship.
+
+    Without this the frontend shows 'no chart definition associated with this
+    component' because the chart metadata isn't hydrated into the dashboard.
+    """
+    for cid, cname in chart_ids:
+        try:
+            resp = requests.get(urljoin(base_url, f"/api/v1/chart/{cid}"),
+                                headers=headers(token), timeout=10)
+            if resp.status_code == 200:
+                existing = resp.json().get("result", {}).get("dashboards", [])
+                dash_ids = [d["id"] for d in existing if isinstance(d, dict)]
+                if dash_id not in dash_ids:
+                    dash_ids.append(dash_id)
+                requests.put(urljoin(base_url, f"/api/v1/chart/{cid}"),
+                             headers=headers(token),
+                             json={"dashboards": dash_ids}, timeout=10)
+        except Exception as e:
+            print(f"  ⚠ Failed to link chart {cid} to dashboard {dash_id}: {e}")
+
 
 def create_dashboard(token, base_url, chart_ids):
     """Create dashboard with charts arranged in rows of 3."""
@@ -387,6 +454,7 @@ def create_dashboard(token, base_url, chart_ids):
     if resp.status_code == 201:
         result = resp.json()
         print(f"  ✓ Dashboard 'Grocery Operations' (ID={result['id']})")
+        _link_charts(token, base_url, result["id"], chart_ids)
         return result
     else:
         # Dashboard may already exist — try fetching it
@@ -403,6 +471,7 @@ def create_dashboard(token, base_url, chart_ids):
                             headers=headers(token), json=payload, timeout=30)
                         if resp2.status_code == 200:
                             print(f"  ✓ Dashboard updated (ID={d['id']})")
+                            _link_charts(token, base_url, d["id"], chart_ids)
                             return resp2.json()
                         else:
                             print(f"  ✗ Update failed: {resp2.status_code} {resp2.text[:300]}")
@@ -444,6 +513,7 @@ def main():
     for table, col in [
         ("mart_delivery_performance", "report_week_start"),
         ("mart_store_weekly_summary", "week_start"),
+        ("mart_hourly_sales_pattern", "as_of_date"),
     ]:
         if table in ds_ids and ds_ids[table]:
             set_main_dttm(token, args.superset_url, ds_ids[table], col)

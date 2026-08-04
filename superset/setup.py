@@ -424,12 +424,14 @@ def get_or_create_grocery_charts(token, datasets):
             print(f"  Chart '{name}' already exists (id={existing[name]})")
             charts[name] = existing[name]
         else:
+            from _superset_query_context import build_query_context
             r = requests.post(f"{BASE}/api/v1/chart/", headers=h(token), json={
                 "slice_name": name,
                 "viz_type": viz_type,
                 "datasource_id": ds_id,
                 "datasource_type": "table",
                 "params": chart_params,
+                "query_context": build_query_context(ds_id, json.loads(chart_params), token, BASE),
             })
             if r.status_code in (200, 201):
                 cid = r.json()["id"]

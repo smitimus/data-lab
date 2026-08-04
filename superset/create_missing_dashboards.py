@@ -51,11 +51,17 @@ def headers(token):
 
 
 def make_metric(col, agg="SUM", label=None):
+    # Use a clean snake_case label (no parentheses / function name) so the
+    # generated SQL alias survives pandas postprocessing in all viz types.
+    # Superset derives the result-column alias from `label`, and labels like
+    # "AVG(redemption_rate_pct)" break dist_bar / time-series postprocessing
+    # ("None of [Index(...)] are in the [columns]"). A clean label avoids that.
+    clean = label or f"{agg.lower()}_{col}"
     return {
         "expressionType": "SIMPLE",
         "column": {"column_name": col, "type": ""},
         "aggregate": agg,
-        "label": label or f"{agg}({col})",
+        "label": clean,
     }
 
 
@@ -104,12 +110,27 @@ def set_main_dttm(token, base_url, ds_id, col):
         return False
 
 
+def _dataset_dttm_col(token, base_url, ds_id):
+    """Fetch the dataset's main_dttm_col (the temporal column), or None."""
+    try:
+        r = requests.get(
+            urljoin(base_url, f"/api/v1/dataset/{ds_id}"),
+            headers=headers(token), timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("result", {}).get("main_dttm_col")
+    except Exception:
+        pass
+    return None
+
+
 def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
     # Idempotent: reuse an existing chart with the same name (avoids duplicates on re-run).
     existing = _find_chart_id(token, base_url, slice_name)
     if existing:
         print(f"  ~ Chart '{slice_name}' already exists (id={existing})")
         return {"id": existing, "slice_name": slice_name}
+    from _superset_query_context import build_query_context
     base_params = {
         "datasource": f"{ds_id}__table",
         "viz_type": viz_type,
@@ -118,12 +139,43 @@ def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
         "adhoc_filters": [],
     }
     base_params.update(params_extra)
+    # Charts on a temporal dataset need granularity_sqla in BOTH params (used by
+    # the legacy /superset/explore_json/ endpoint) and query_context (new endpoint).
+    # Without it, Superset 4.x returns "Datetime column not provided" for charts
+    # whose params don't otherwise reference time (e.g. snapshot marts grouped by a
+    # dimension). Auto-resolve from the dataset's main_dttm_col.
+    # Only inject for TIME-SERIES viz types; non-time-series charts (dist_bar,
+    # pie, big_number, table, ...) must NOT carry a temporal column or the legacy
+    # endpoint applies a broken rolling window ("Applied rolling window did not
+    # return any data").
+    NON_TIME_VIZ = {
+        "dist_bar", "pie", "big_number", "big_number_total", "table",
+        "word_cloud", "treemap", "sunburst", "sankey", "chord", "world_map",
+        "histogram", "box_plot", "heatmap", "rose", "funnel", "gauge",
+        "graph_chart", "mapbox", "deck_scatter", "deck_sandwich", "deck_path",
+        "deck_arc", "deck_grid", "deck_hex", "deck_geojson", "deck_polygon",
+        "paired_ttest", "rooted_ttest", "filter_box",
+    }
+    if (not base_params.get("granularity_sqla") and not base_params.get("granularity")
+            and token and viz_type not in NON_TIME_VIZ):
+        dttm = _dataset_dttm_col(token, base_url, ds_id)
+        if dttm:
+            base_params["granularity_sqla"] = dttm
+    # Fix: pie and big_number charts expect singular "metric", not "metrics"
+    if viz_type in ("pie", "big_number_total", "big_number"):
+        if "metrics" in base_params and "metric" not in base_params:
+            val = base_params.pop("metrics")
+            if isinstance(val, list) and len(val) > 0:
+                base_params["metric"] = val[0]
+            elif isinstance(val, dict):
+                base_params["metric"] = val
     payload = {
         "slice_name": slice_name,
         "viz_type": viz_type,
         "datasource_id": ds_id,
         "datasource_type": "table",
         "params": json.dumps(base_params),
+        "query_context": build_query_context(ds_id, base_params, token, base_url),
         "dashboards": [],
     }
     resp = requests.post(
@@ -379,16 +431,16 @@ def main():
         "mart_promotion_redemption": "valid_from",
         "mart_promotion_effectiveness": "ad_week_start",
         # data-lab#27: Inventory & Shrinkage domain
-        "mart_inventory_valuation": "location_id",
+        "mart_inventory_valuation": "as_of_date",
         "mart_shrinkage_analysis": "event_date",
-        "mart_inventory_turnover": "last_updated",
+        "mart_inventory_turnover": "last_receipt_dt",
         # data-lab#28: HR & Labor domain
         "mart_labor_cost_by_department": "report_date",
         "mart_attendance_compliance": "report_date",
         # data-lab#30: Transport & Logistics domain
-        "mart_route_efficiency": "warehouse_name",
-        "mart_fleet_cost": "license_plate",
-        "mart_fleet_utilization": "license_plate",
+        "mart_route_efficiency": "as_of_date",
+        "mart_fleet_cost": "as_of_date",
+        "mart_fleet_utilization": "first_load_date",
         "mart_transport_daily_metrics": "load_date",
     }
     for table, col in date_map.items():
@@ -680,8 +732,8 @@ def main():
             "name": "Order-to-Delivery Days (All Stages)",
             "viz": "bar",
             "params": {
-                "metrics": [make_metric("days_order_to_delivery", "AVG")],
-                "groupby": ["pipeline_stage"],
+                "metrics": [make_metric("hours_to_fulfill", "AVG")],
+                "groupby": ["order_status"],
                 "row_limit": 10,
             },
         },
@@ -691,7 +743,7 @@ def main():
             "viz": "pie",
             "params": {
                 "metrics": [make_metric("order_id", "COUNT_DISTINCT")],
-                "groupby": ["pipeline_stage"],
+                "groupby": ["order_status"],
                 "row_limit": 10,
             },
         },
@@ -700,7 +752,7 @@ def main():
             "name": "Days to Approve by Status",
             "viz": "bar",
             "params": {
-                "metrics": [make_metric("hours_to_approve", "AVG")],
+                "metrics": [make_metric("hours_to_fulfill", "AVG")],
                 "groupby": ["order_status"],
                 "row_limit": 10,
             },
@@ -721,7 +773,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("fill_rate_pct", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "row_limit": 20,
             },
         },
@@ -731,7 +783,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("on_time_rate_pct", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "row_limit": 20,
             },
         },
@@ -741,7 +793,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("short_rate_pct", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "row_limit": 20,
             },
         },
@@ -751,7 +803,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("order_to_fulfill_hours", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "row_limit": 20,
             },
         },
@@ -771,7 +823,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("total_fill_rate_pct", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "row_limit": 20,
             },
         },
@@ -861,7 +913,7 @@ def main():
             "viz": "echarts_timeseries_line",
             "params": {
                 "metrics": [make_metric("total_loads", "SUM")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "granularity_sqla": "load_date",
                 "time_grain_sqla": "P1D",
                 "row_limit": 10000,
@@ -873,7 +925,7 @@ def main():
             "viz": "echarts_timeseries_line",
             "params": {
                 "metrics": [make_metric("completion_rate_pct", "AVG")],
-                "groupby": ["warehouse_name"],
+                "groupby": ["warehouse_location_id"],
                 "granularity_sqla": "load_date",
                 "time_grain_sqla": "P1D",
                 "row_limit": 10000,
@@ -964,7 +1016,7 @@ def main():
             "name": "Members by Tier",
             "viz": "bar",
             "params": {
-                "metrics": [make_metric("member_count", "SUM")],
+                "metrics": [make_metric("tier_total_members", "SUM")],
                 "groupby": ["loyalty_tier"],
                 "row_limit": 10,
             },
@@ -1037,7 +1089,7 @@ def main():
         {
             "key": "mart_promotion_redemption",
             "name": "Coupon Redemption Rate",
-            "viz": "bar",
+            "viz": "pie",
             "params": {
                 "metrics": [make_metric("redemption_rate_pct", "AVG")],
                 "groupby": ["promotion_name"],
@@ -1057,7 +1109,7 @@ def main():
         {
             "key": "mart_product_price_elasticity",
             "name": "Price Elasticity Explorer",
-            "viz": "bar",
+            "viz": "pie",
             "params": {
                 "metrics": [make_metric("price_elasticity", "AVG")],
                 "groupby": ["product_id"],
@@ -1131,7 +1183,7 @@ def main():
             "viz": "bar",
             "params": {
                 "metrics": [make_metric("estimated_annual_turnover", "AVG")],
-                "groupby": ["department_name"],
+                "groupby": ["location_name"],
                 "row_limit": 20,
             },
         },
@@ -1157,11 +1209,11 @@ def main():
     ]
     exec_dttm = {
         "mart_daily_revenue": "transaction_date",
-        "mart_inventory_valuation": "location_id",
+        "mart_inventory_valuation": "as_of_date",
         "mart_shrinkage_analysis": "event_date",
         "mart_labor_cost_by_department": "report_date",
         "mart_supply_chain_kpis": "report_date",
-        "mart_route_efficiency": "warehouse_name",
+        "mart_route_efficiency": "as_of_date",
         "mart_loyalty_engagement": None,
     }
     for t in exec_tables:
