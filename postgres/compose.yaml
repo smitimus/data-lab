@@ -33,6 +33,7 @@ services:
       interval: 10s
       retries: 5
       start_period: 5s
+    shm_size: '256mb'
     restart: always
     networks:
       - postgres_network
