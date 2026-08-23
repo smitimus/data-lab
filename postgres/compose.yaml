@@ -6,7 +6,7 @@
 services:
   postgres:
     container_name: postgres
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -20,7 +20,7 @@ services:
       - homepage.href=http://${IP}:${POSTGRES_PORT:-5432}/
       - homepage.description=Shared EDW — postgres/postgres (port 5432)
     volumes:
-      - ${CONF}/postgres/data:/var/lib/postgresql/data
+      - ${CONF}/postgres/data:/var/lib/postgresql
       - ./init:/docker-entrypoint-initdb.d
     ports:
       - ${POSTGRES_PORT:-5432}:5432
