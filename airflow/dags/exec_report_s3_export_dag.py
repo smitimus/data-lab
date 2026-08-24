@@ -1,6 +1,7 @@
 """
-exec_report_s3_export_dag.py — daily export of Superset dashboard 13
-("Store — Executive Performance Overview") to the MinIO S3 bucket.
+exec_report_s3_export_dag.py — daily export of the Superset exec dashboard
+("Store — Executive Performance Overview", resolved by title — ids drift
+across reseeds; was id 13, now id 10) to the MinIO S3 bucket.
 
 Part of data-lab#35 (pivot from email to S3) / data-lab#36 (MinIO stack).
 The heavy lifting lives in export_exec_report.export().
@@ -22,7 +23,7 @@ DEFAULT_ARGS = {
 
 with DAG(
     dag_id="exec_report_s3_export",
-    description="Daily CSV export of Superset exec dashboard 13 to MinIO S3 (reports/).",
+    description="Daily CSV export of Superset exec dashboard (Store — Executive Performance Overview) to MinIO S3 (reports/).",
     default_args=DEFAULT_ARGS,
     schedule="0 6 * * *",          # 06:00 daily
     start_date=datetime(2026, 7, 20),
@@ -30,6 +31,6 @@ with DAG(
     tags=["reporting", "s3", "superset"],
 ) as dag:
     export_task = PythonOperator(
-        task_id="export_dashboard_13_to_s3",
+        task_id="export_exec_dashboard_to_s3",
         python_callable=export,
     )

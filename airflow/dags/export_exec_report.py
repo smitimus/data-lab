@@ -1,11 +1,17 @@
 """
 export_exec_report.py — data-lab#35/#36 daily executive report export.
 
-Pulls the 8 charts on dashboard 13 ("Store — Executive Performance
-Overview") from Superset and writes each as a CSV into the MinIO
+Pulls the 8 charts on the "Store — Executive Performance Overview"
+dashboard from Superset and writes each as a CSV into the MinIO
 S3 bucket `reports/`, under a dated prefix. Runs inside the Airflow
 worker (which shares `postgres_network` with both `superset` and
 `minio`).
+
+The dashboard is resolved BY TITLE, not by hardcoded id — Superset
+ids drift across seeds/reseeds (dashboard id 13 became id 10 after
+the 2026-08 reseed and broke this DAG with a 404). Set DASHBOARD_ID
+env to pin an id explicitly if the title lookup ever matches more
+than one dashboard.
 
 Why the SQL Lab path (not /api/v1/chart/data):
   Superset 4.1.2's /chart/data endpoint rejects programmatic
@@ -22,6 +28,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from datetime import datetime, timezone
 
 import boto3
@@ -34,7 +41,16 @@ from botocore.client import Config
 SUPERSET_URL = "http://superset:8088"
 SUPERSET_USER = "admin"
 SUPERSET_PASS = "admin"
-DASHBOARD_ID = 13
+
+# Dashboard resolved by title by default (ids drift across reseeds; the old
+# hardcoded id 13 went 404 after the 2026-08 reseed). DASHBOARD_ID env pins
+# a specific id when needed.
+DASHBOARD_TITLE = os.environ.get(
+    "DASHBOARD_TITLE", "Store — Executive Performance Overview"
+)
+DASHBOARD_ID = (
+    int(os.environ["DASHBOARD_ID"]) if os.environ.get("DASHBOARD_ID") else None
+)
 
 # Dev defaults — overridable via env (S3_*). Change before any non-local deploy.
 # MinIO enforces an 8-char minimum on the root password, so the "admin/admin"
@@ -57,11 +73,45 @@ def _superset_token() -> str:
     return r.json()["access_token"]
 
 
-def _chart_table_map(token: str) -> list[dict]:
-    """Return [{chart_id, slice_name, schema, table, sql}] for dashboard 13."""
+def _get_json_result(r: requests.Response, what: str) -> dict:
+    """Return response JSON's `result`, raising a clear error otherwise."""
+    if r.status_code != 200:
+        raise RuntimeError(f"{what}: Superset returned HTTP {r.status_code}: {r.text[:300]}")
+    body = r.json()
+    if "result" not in body:
+        raise RuntimeError(f"{what}: Superset response has no 'result' key: {str(body)[:300]}")
+    return body["result"]
+
+
+def _dashboard_id(token: str) -> int:
+    """Resolve the exec dashboard id by title (ids drift across reseeds)."""
+    if DASHBOARD_ID is not None:
+        return DASHBOARD_ID
     h = {"Authorization": f"Bearer {token}"}
-    dash = requests.get(f"{SUPERSET_URL}/api/v1/dashboard/{DASHBOARD_ID}",
-                       headers=h, timeout=20).json()["result"]
+    r = requests.get(
+        f"{SUPERSET_URL}/api/v1/dashboard/?q=(page_size:100)",
+        headers=h, timeout=20,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"dashboard list: Superset returned HTTP {r.status_code}: {r.text[:300]}")
+    for d in r.json().get("result", []):
+        if d.get("dashboard_title") == DASHBOARD_TITLE:
+            return int(d["id"])
+    titles = ", ".join(str(d.get("dashboard_title")) for d in r.json().get("result", []))[:400]
+    raise RuntimeError(
+        f"dashboard '{DASHBOARD_TITLE}' not found in Superset. "
+        f"Available dashboards: {titles}"
+    )
+
+
+def _chart_table_map(token: str, dashboard_id: int) -> list[dict]:
+    """Return [{chart_id, slice_name, schema, table, sql}] for the exec dashboard."""
+    h = {"Authorization": f"Bearer {token}"}
+    dash = _get_json_result(
+        requests.get(f"{SUPERSET_URL}/api/v1/dashboard/{dashboard_id}",
+                     headers=h, timeout=20),
+        f"dashboard {dashboard_id}",
+    )
     pj = json.loads(dash["position_json"])
     chart_ids = sorted(
         {v["meta"]["chartId"] for v in pj.values()
@@ -69,14 +119,20 @@ def _chart_table_map(token: str) -> list[dict]:
     )
     out = []
     for cid in chart_ids:
-        meta = requests.get(f"{SUPERSET_URL}/api/v1/chart/{cid}",
-                            headers=h, timeout=20).json()["result"]
+        meta = _get_json_result(
+            requests.get(f"{SUPERSET_URL}/api/v1/chart/{cid}",
+                         headers=h, timeout=20),
+            f"chart {cid}",
+        )
         ds_raw = meta.get("datasource") or (
             json.loads(meta["params"]).get("datasource") if meta.get("params") else None
         )
         ds_id = int(str(ds_raw).split("__")[0])
-        ds = requests.get(f"{SUPERSET_URL}/api/v1/dataset/{ds_id}",
-                         headers=h, timeout=20).json()["result"]
+        ds = _get_json_result(
+            requests.get(f"{SUPERSET_URL}/api/v1/dataset/{ds_id}",
+                         headers=h, timeout=20),
+            f"dataset {ds_id} (chart {cid})",
+        )
         schema = ds.get("schema") or "grocery"
         table = ds["table_name"]
         out.append({
@@ -125,7 +181,8 @@ def _s3_client():
 
 def export() -> dict:
     token = _superset_token()
-    charts = _chart_table_map(token)
+    dash_id = _dashboard_id(token)
+    charts = _chart_table_map(token, dash_id)
     s3 = _s3_client()
     # safe object-key prefix (no spaces/slashes)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -141,7 +198,8 @@ def export() -> dict:
 
     # also drop a manifest
     manifest = {
-        "dashboard": DASHBOARD_ID,
+        "dashboard": dash_id,
+        "dashboard_title": DASHBOARD_TITLE,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "files": written,
     }
