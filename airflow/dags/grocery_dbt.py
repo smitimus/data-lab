@@ -127,6 +127,12 @@ with DAG(
         execution_timeout=timedelta(minutes=10),
     )
 
+    t_run_intermediate = BashOperator(
+        task_id="run_intermediate",
+        bash_command=DBT.format(cmd="run --select intermediate"),
+        execution_timeout=timedelta(minutes=15),
+    )
+
     t_run_marts = BashOperator(
         task_id="run_marts",
         bash_command=DBT.format(cmd="run --select marts"),
@@ -139,5 +145,6 @@ with DAG(
         execution_timeout=timedelta(minutes=10),
     )
 
-    t_freshness >> staging_group >> [t_run_marts, t_test_staging]
+    t_freshness >> staging_group >> t_run_intermediate >> t_run_marts
+    staging_group >> t_test_staging
     t_run_marts >> t_test_marts
