@@ -16,7 +16,16 @@ cp .env.example .env
 
 ## Usage
 
-bash e2e-test.sh
+bash full-cycle.sh              # full wipe→reseed→start→pipeline→verify cycle (~90 min)
+bash full-cycle.sh --no-wipe    # reuse existing _conf (start+pipeline+verify only)
+bash full-cycle.sh --verify     # verification gates only (non-destructive)
+
+**`full-cycle.sh` is the primary entrypoint** — it orchestrates the whole
+fresh-wipe test including this script's data checks. Run it only when
+explicitly requested; see the Hermes skill `e2e-testing` for the run protocol
+and pass-invalidation rules.
+
+bash e2e-test.sh                # data-correctness checks against a running stack
 
 Exit 0 = all tests pass, 1 = any test fails.
 
