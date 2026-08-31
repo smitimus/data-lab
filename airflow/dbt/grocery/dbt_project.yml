@@ -19,7 +19,7 @@ clean-targets:
 models:
   grocery:
     staging:
-      +materialized: table
+      +materialized: view
       +schema: staging
     marts:
       +materialized: table

@@ -13,6 +13,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       DBT_PROFILES_DIR: /usr/app
+      # Write dbt logs to container-local tmp. The shared project mount's logs/
+      # is owned by airflow-worker's uid (50000); dbt-docs runs as 1000 and
+      # crash-looped on PermissionError writing /usr/app/dbt/logs/dbt.log.
+      # 260831 - fix dbt-docs restart loop
+      DBT_LOG_PATH: /tmp/dbt-logs
     user: "${AIRFLOW_UID:-1000}:0"
     volumes:
       - ${STACKS}/airflow/dbt/grocery:/usr/app/dbt
