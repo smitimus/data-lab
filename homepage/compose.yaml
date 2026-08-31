@@ -15,7 +15,9 @@ services:
     #  - PUID=${PUID}
     #  - PGID=${PGID}
       - TZ=${TZ}
-      - HOMEPAGE_ALLOWED_HOSTS=${IP}
+      # 260831: also allow localhost — host validation 400'd on http://localhost/
+      # (only ${IP} was allowed); users on this box reach the dashboard by that name.
+      - HOMEPAGE_ALLOWED_HOSTS=${IP},localhost
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000 > /dev/null 2>&1"]
       interval: 30s

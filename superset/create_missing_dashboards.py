@@ -371,6 +371,12 @@ def main():
         "mart_employee_productivity",
         "mart_employee_cost",
         "mart_loyalty_cohort",
+        # 260831 fix: register the loyalty RFM/engagement datasets up-front.
+        # The Loyalty & Retention dashboard (data-lab#26) builds 7 of its 8
+        # charts on these two tables; they were only registered later (exec
+        # section), so a fresh-seed run silently skipped those charts.
+        "mart_loyalty_rfm",
+        "mart_loyalty_engagement",
         "mart_shrink_analysis",
         "mart_department_shrinkage",
         "mart_promotion_effectiveness",
@@ -1004,7 +1010,9 @@ def main():
         {
             "key": "mart_loyalty_engagement",
             "name": "Tier Migration (Upgrades)",
-            "viz": "bar",
+            # 260831: bar viz fails "Datetime column not provided" on this
+            # snapshot mart (no date column); pie works on all datasets.
+            "viz": "pie",
             "params": {
                 "metrics": [make_metric("tier_upgrades", "SUM")],
                 "groupby": ["current_tier"],
