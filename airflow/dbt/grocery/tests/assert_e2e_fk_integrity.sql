@@ -1,3 +1,8 @@
+-- Soft tier (t_03a3b9fd): 3 known-failing loyalty/POS orphan edges
+-- (transaction_items→transactions, lpt→members, lpt→transactions) from
+-- ingest gaps. Individual FK relationships that ARE clean run at error
+-- severity via staging.yml defaults. Split to per-edge critical tests when
+-- the orphan rows are fixed upstream.
 {{ config(severity='warn') }}
 
 -- E2E Foreign Key Integrity Test

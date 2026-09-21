@@ -47,6 +47,11 @@ STAGING_MODELS = [
     "stg_pos_loyalty_point_transactions",
     "stg_pos_transactions",
     "stg_pos_transaction_items",
+    "stg_pos_returns",
+    "stg_pos_return_items",
+    "stg_online_orders",
+    "stg_online_order_items",
+    "stg_online_order_events",
     "stg_timeclock_events",
     "stg_ordering_store_orders",
     "stg_ordering_store_order_items",
@@ -109,7 +114,7 @@ with DAG(
 
     t_freshness = BashOperator(
         task_id="check_source_freshness",
-        bash_command=DBT.format(cmd="source freshness") + " || true",
+        bash_command=DBT.format(cmd="source freshness"),
         execution_timeout=timedelta(minutes=5),
     )
 
@@ -123,7 +128,9 @@ with DAG(
 
     t_test_staging = BashOperator(
         task_id="dbt_test_staging",
-        bash_command=DBT.format(cmd="test --select staging") + " || true",
+        # post_marts tests reference mart tables (cross-layer e2e asserts) —
+        # excluded here so they can't race run_marts; they ride dbt_test_marts.
+        bash_command=DBT.format(cmd="test --select staging --exclude tag:post_marts"),
         execution_timeout=timedelta(minutes=10),
     )
 
@@ -141,7 +148,7 @@ with DAG(
 
     t_test_marts = BashOperator(
         task_id="dbt_test_marts",
-        bash_command=DBT.format(cmd="test --select marts") + " || true",
+        bash_command=DBT.format(cmd="test --select marts tag:post_marts"),
         execution_timeout=timedelta(minutes=10),
     )
 

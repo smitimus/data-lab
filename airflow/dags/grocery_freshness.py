@@ -1,7 +1,7 @@
 """
 Grocery Source Freshness DAG
 ============================
-Runs `dbt source freshness` on all 27 grocery source tables and reports
+Runs `dbt source freshness` on all 32 grocery source tables and reports
 the results. This is a monitoring DAG — it does not ingest or transform data.
 
 Use it to alert when raw source data has gone stale (warn: 24h, error: 48h).
@@ -31,7 +31,7 @@ default_args = {
 
 with DAG(
     dag_id="grocery_freshness",
-    description="Monitor dbt source freshness for all 27 grocery raw tables",
+    description="Monitor dbt source freshness for all 32 grocery raw tables",
     default_args=default_args,
     start_date=datetime(2026, 6, 29),
     schedule="0 */6 * * *",        # every 6 hours

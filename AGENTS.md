@@ -84,7 +84,7 @@ dbt test --select staging
 dbt test --select marts
 ```
 
-dbt project: `/opt/data-lab/airflow/dbt/grocery/` (27 staging models, 14 mart models, 7 custom tests)
+dbt project: `/opt/data-lab/airflow/dbt/grocery/` (29 staging models, 14 mart models, 8 custom tests)
 
 ## PostgreSQL Access
 
@@ -100,7 +100,7 @@ docker exec verisim-grocery psql -U verisim -d grocery -c "SELECT ..."
 
 ## Source Tables Contract (verisim → dbt)
 
-The dbt staging layer expects these 27 source tables from Verisim's generator:
+The dbt staging layer expects these 29 source tables from Verisim's generator:
 
 | Source Schema | Table | dbt Staging Model | Notes |
 |--------------|-------|-------------------|-------|
@@ -116,6 +116,8 @@ The dbt staging layer expects these 27 source tables from Verisim's generator:
 | pos | loyalty_point_transactions | stg_pos_loyalty_point_transactions | Points ledger |
 | pos | transactions | stg_pos_transactions | POS header |
 | pos | transaction_items | stg_pos_transaction_items | Line items |
+| pos | returns | stg_pos_returns | Customer returns (refund ≤ txn total; 1 per txn) |
+| pos | return_items | stg_pos_return_items | Return line detail (qty ≤ sold qty) |
 | ordering | store_orders | stg_ordering_store_orders | Store replenishment orders |
 | ordering | store_order_items | stg_ordering_store_order_items | Order line items |
 | fulfillment | orders | stg_fulfillment_orders | Warehouse fulfillment |
@@ -155,7 +157,8 @@ TOKEN=$(curl -s -X POST http://localhost:8088/api/v1/security/login \
   -d '{"username":"admin","password":"admin","provider":"db"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-curl -s -H "Authorization: Bearer $TOKEN" \
+curl -s \
+  -H "Authorization: Bearer ***" \
   "http://localhost:8088/api/v1/dashboard/export/?q=!(1,2)" \
   -o superset/dashboards/export.zip
 ```
@@ -175,13 +178,13 @@ curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
 verisim-grocery source DB (port 5499)
   │
   │ Airflow: grocery_ingest_api DAG
-  │ (27 source tables → raw_* schemas via API)
+  │ (29 source tables → raw_* schemas via API)
   ▼
 raw_hr, raw_pos, raw_timeclock, raw_ordering,
 raw_fulfillment, raw_transport, raw_inv, raw_pricing
   │
   │ dbt run --select staging
-  │ (27 SQL views, one per source table)
+  │ (29 SQL views, one per source table)
   ▼
 staging (stg_*) — cleaned, typed, renamed columns
   │
@@ -195,7 +198,7 @@ mart (mart_*) — revenue, labor, inventory, loyalty, products, etc.
   └── dbt Docs (catalog + lineage + tests)
 ```
 
-### Staging Layer (27 models)
+### Staging Layer (29 models)
 - Raw → staging is **light** cleanup: column rename, type cast, COALESCE nulls
 - Materialized as views (no storage cost)
 - One view per source table (1:1 mapping)
@@ -244,7 +247,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v Exited
 
 ## Pipeline Gotchas
 
-- **DAGs start paused** — unpause before triggering: `curl -X PATCH http://localhost:8080/api/v2/dags/<dag_id> -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"is_paused": false}'`
+- **DAGs start paused** — unpause before triggering (get a JWT first: `POST http://localhost:8080/auth/token`): `curl -X PATCH http://localhost:8080/api/v2/dags/<dag_id> -H 'Content-Type: application/json' -d '{"is_paused": false}'` with the `Authorization: Bearer <access_token>` header
 - **First pipeline run on new install may fail** on `stg_pos_loyalty_point_transactions` (verisim still bootstrapping DB) — re-run passes
 - **dbt-docs**: runs `dbt docs generate` as same UID as Airflow. Don't change `user:` in dbt-docs/compose.yaml or PermissionError on logs/dbt.log
 - **Ingest uses DROP TABLE ... CASCADE** for full-refresh tables because dbt staging views depend on raw tables; plain DROP TABLE raises DependentObjectsStillExist

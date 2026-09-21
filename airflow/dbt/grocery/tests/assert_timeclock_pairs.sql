@@ -1,4 +1,5 @@
-{{ config(severity='warn') }}
+-- Critical tier (t_03a3b9fd): clock in/out pairing is a hard integrity
+-- invariant; failures block the pipeline (global severity: error).
 -- For each employee on each day, clock_in and clock_out events must be equal in count,
 -- and break_start and break_end events must be equal in count.
 -- Unpaired events indicate missed punches in the timeclock data.

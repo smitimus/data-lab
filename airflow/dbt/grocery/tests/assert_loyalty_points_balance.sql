@@ -1,3 +1,5 @@
+-- Soft tier (t_03a3b9fd): 413 known balance-chain breaks from same-tick
+-- ordering ambiguity — kept at warn until the loyalty chain is reconciled.
 {{ config(severity='warn') }}
 
 -- For each member's loyalty point transactions in chronological order,

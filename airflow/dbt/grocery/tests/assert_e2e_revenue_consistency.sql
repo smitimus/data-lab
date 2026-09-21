@@ -1,9 +1,11 @@
-{{ config(severity='error') }}
+{{ config(severity='error', tags=['post_marts']) }}
 
 -- E2E Revenue Consistency Test
 -- Verifies that revenue totals match across all data layers.
 -- Returns rows on failure (any mismatch > $1.00 tolerance).
 -- A passing test returns 0 rows.
+-- 'post_marts' tag: refs mart_daily_revenue, so this must run AFTER
+-- run_marts (dbt-test-staging raced mid-rebuild on fresh reseeds — e2e 2026-09-06).
 
 with
 

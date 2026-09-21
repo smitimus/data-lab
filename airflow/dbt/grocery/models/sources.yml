@@ -37,7 +37,8 @@ sources:
 
   # ---------------------------------------------------------------------------
   # raw_pos — POS schema (departments, products, price_history, coupons,
-  #           combo_deals, loyalty_members, transactions, transaction_items)
+  #           combo_deals, loyalty_members, transactions, transaction_items,
+  #           returns, return_items)
   # ---------------------------------------------------------------------------
   - name: raw_pos
     schema: raw_pos
@@ -75,10 +76,16 @@ sources:
         columns:
           - name: pt_id
             tests: [unique, not_null]
-          - name: member_id
-            tests: [not_null]
           - name: transaction_id
-            tests: [not_null]
+            tests:
+              # Soft: 300 raw rows arrive with null transaction_id (generator
+              # edge for loyalty point grants); blocking would fail every run.
+              - not_null:
+                  config:
+                    severity: warn
+          - name: member_id
+            tests:
+              - not_null
       - name: transactions
         columns:
           - name: transaction_id
@@ -90,6 +97,52 @@ sources:
           - name: item_id
             tests: [unique, not_null]
           - name: transaction_id
+            tests: [not_null]
+      - name: returns
+        columns:
+          - name: return_id
+            tests: [unique, not_null]
+          - name: transaction_id
+            tests: [not_null]
+          - name: return_dt
+            tests: [not_null]
+      - name: return_items
+        columns:
+          - name: return_item_id
+            tests: [unique, not_null]
+          - name: return_id
+            tests: [not_null]
+          - name: transaction_item_id
+            tests: [not_null]
+
+  # ---------------------------------------------------------------------------
+  # raw_online — Online orders schema (e-commerce pickup + delivery, t_24fae529)
+  # ---------------------------------------------------------------------------
+  - name: raw_online
+    schema: raw_online
+    description: "Online order source tables loaded via API DAG (grocery_ingest_api) → raw_online schema"
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_sdc_extracted_at::timestamp"
+    tables:
+      - name: orders
+        columns:
+          - name: order_id
+            tests: [unique, not_null]
+          - name: placed_dt
+            tests: [not_null]
+      - name: order_items
+        columns:
+          - name: item_id
+            tests: [unique, not_null]
+          - name: order_id
+            tests: [not_null]
+      - name: order_events
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+          - name: order_id
             tests: [not_null]
 
   # ---------------------------------------------------------------------------

@@ -21,7 +21,10 @@
 set -uo pipefail
 
 DATALAB="${DATALAB:-/opt/data-lab}"
-IP="${IP:-192.168.1.7}"
+# Default to THIS host's address, never a hardcoded one: a baked-in IP makes the gate
+# probe a different machine and report on the wrong instance (found 2026-09-20 — this
+# defaulted to 192.168.1.7, the host being replaced).
+IP="${IP:-$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')}"
 LOG_DIR="${LOG_DIR:-/tmp/e2e-full-cycle}"
 LOG_FILE="$LOG_DIR/full-cycle-$(date +%Y%m%d-%H%M%S).log"
 RUN_TAG="manual_fullcycle_$(date +%s)"

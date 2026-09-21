@@ -61,8 +61,19 @@ select * from renamed
 - **Schema tests** in YAML: `unique`, `not_null`, `relationships`, `accepted_values`
 - **Data tests** in YAML: `dbt_expectations` macros (row counts, value ranges, set membership)
 - **Custom tests** in `tests/`: `assert_*` SQL that returns rows on failure
-- **Global severity**: `warn` (not `error`) — set in `dbt_project.yml`
-- **Relationship severity**: many FK relationships use `severity: warn` to avoid blocking on edge cases
+- **Severity is TIERED per test** (t_03a3b9fd): default `error` in
+  `dbt_project.yml` — a failing test FAILS the DAG run. Critical tier
+  (balance checks, FK relationships, e2e propagation) inherits the default.
+  Soft tier (range/value-set expectations, known-failing upstream edges)
+  opts out with per-test `config: severity: warn` + a comment naming the
+  reason and count of known failures.
+- **Cross-layer tests carry `tags=['post_marts']`** (e2e 2026-09-06): any
+  `tests/*.sql` that `ref()`s a mart model must be tagged — `dbt_test_staging`
+  excludes the tag, `dbt_test_marts` selects `marts tag:post_marts`. Without
+  it the staging test task races the mart rebuild and fails on stale tables
+  after a fresh reseed.
+- **Freshness**: `warn_after: 24h`, `error_after: 48h` — freshness errors
+  also block the `grocery_dbt` DAG now (`|| true` removed).
 
 ### Freshness
 All 8 sources have freshness configured: `warn_after: 24h`, `error_after: 48h`. Tracked via `_sdc_extracted_at::timestamp`.
@@ -71,6 +82,6 @@ All 8 sources have freshness configured: `warn_after: 24h`, `error_after: 48h`. 
 
 - **Don't** use `ref()` on raw tables — always go through `source()` in staging
 - **Don't** materialize staging as tables — they're views by design
-- **Don't** change test severity to `error` — pipeline uses `warn` globally
+- **Don't** neuter the gate: no global `+severity: warn`, no `|| true` on DAG test tasks, no re-adding either. New tests are `error` by default; only demote to `warn` with a comment explaining the known-failure reason (tiered gating, t_03a3b9fd).
 - **Don't** add `dbt_packages/` or `target/` to git — they're gitignored
 - **Don't** use `execute_values` in dbt — use Jinja loops or `unnest` for bulk inserts

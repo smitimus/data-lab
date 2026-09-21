@@ -29,4 +29,7 @@ models:
       +schema: intermediate
 
 tests:
-  +severity: warn
+  # Tiered gating (t_03a3b9fd): critical by default. Balance/FK/propagation
+  # assertions FAIL the build. Soft expectations (ranges, value sets, known
+  # upstream data-quality edges) must opt into `severity: warn` per test.
+  +severity: error

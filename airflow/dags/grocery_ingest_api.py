@@ -13,13 +13,14 @@ For a full historical backfill, pass DAG params:
   {"start_dt": "2026-01-01T00:00:00", "end_dt": "2026-03-22T23:59:59"}
 Incremental tables will use those bounds instead of the watermark.
 
-Tables: 27 across 8 schemas.
+Tables: 32 across 9 schemas.
 
 Schedule: None — trigger manually or via Airflow API.
 """
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -51,6 +52,8 @@ API_MAX_LIMIT = 1000  # Verisim API cap (returns 422 if exceeded)
 SMALL_TABLE_THRESHOLD = API_MAX_LIMIT  # full-refresh tables under this limit fetch in one request (avoids offset-pagination race)
 MAX_PAGES = 10_000  # safety cap: fail if pagination exceeds this (infinite loop guard for volatile endpoints)
 INCREMENTAL_FALLBACK_DAYS = 365  # lookback when raw table is empty
+FETCH_RETRIES = 4  # attempts per page request before failing the task (no partial-load-on-error)
+FETCH_RETRY_BACKOFF = 2.0  # seconds; exponential per attempt, capped at 30s
 
 # ---------------------------------------------------------------------------
 # Table registry
@@ -111,6 +114,27 @@ TABLE_CONFIGS = [
     ("pos_transaction_items", "/grocery/pos/transaction-items",
      "raw_pos", "transaction_items", "item_id",
      "incremental", "transaction_dt", "start_dt", "end_dt"),
+
+    ("pos_returns", "/grocery/pos/returns",
+     "raw_pos", "returns", "return_id",
+     "incremental", "return_dt", "start_dt", "end_dt"),
+
+    ("pos_return_items", "/grocery/pos/return-items",
+     "raw_pos", "return_items", "return_item_id",
+     "full", None, None, None),
+
+    # ── Online (e-commerce orders, t_24fae529) ──────────────────────────────
+    ("online_orders", "/grocery/online/orders",
+     "raw_online", "orders", "order_id",
+     "incremental", "placed_dt", "start_dt", "end_dt"),
+
+    ("online_order_items", "/grocery/online/order-items",
+     "raw_online", "order_items", "item_id",
+     "incremental", "placed_dt", "start_dt", "end_dt"),
+
+    ("online_order_events", "/grocery/online/order-events",
+     "raw_online", "order_events", "event_id",
+     "full", None, None, None),
 
     # ── Timeclock ────────────────────────────────────────────────────────────
     ("timeclock_events", "/grocery/timeclock/events",
@@ -189,6 +213,7 @@ _PREFIX_TO_GROUP = {
     "transport_": "transport",
     "inv_": "inv",
     "pricing_": "pricing",
+    "online_": "online",
 }
 
 
@@ -231,6 +256,74 @@ def _get_watermark(conn, schema: str, table: str, col: str) -> str:
     return result.isoformat() if isinstance(result, datetime) else str(result)
 
 
+def _request_page(url: str, p: dict, timeout_s: int, path: str) -> requests.Response:
+    """GET one page, retrying transport errors and 5xx. Raises RuntimeError when
+    retries are exhausted — a partial load must never look like success."""
+    last_err = None
+    for attempt in range(1, FETCH_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=p, timeout=timeout_s)
+        except requests.RequestException as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+        else:
+            if resp.status_code < 500:
+                return resp
+            last_err = f"HTTP {resp.status_code}"
+        if attempt < FETCH_RETRIES:
+            sleep_s = min(FETCH_RETRY_BACKOFF * (2 ** (attempt - 1)), 30)
+            log.warning(
+                "  %s: %s on offset=%s (attempt %d/%d) — retrying in %.0fs",
+                path, last_err, p.get("offset"), attempt, FETCH_RETRIES, sleep_s,
+            )
+            time.sleep(sleep_s)
+    raise RuntimeError(
+        f"{path}: API request failed after {FETCH_RETRIES} attempts "
+        f"(offset={p.get('offset')}) — last error: {last_err}"
+    )
+
+
+def _detect_schema_drift(conn, schema: str, table: str,
+                         api_cols: list, raw_cols: list, task_id: str) -> list:
+    """Harden the verisim<->dbt cross-repo contract against schema drift.
+
+    Columns present in the API payload but missing in the raw table are added
+    as TEXT (ALTER) with a WARNING — the dbt staging model must be updated in
+    lockstep. Columns in raw but missing from the API response are logged as
+    drift (data for them will land as NULL). Returns the refreshed column list.
+    """
+    api_cols = [c for c in api_cols if not c.startswith("_sdc")]
+    new_cols = [c for c in api_cols if c not in raw_cols]
+    missing_on_api_side = [c for c in raw_cols if c not in api_cols]
+    if new_cols:
+        with conn.cursor() as cur:
+            for c in new_cols:
+                cur.execute(f'ALTER TABLE "{schema}"."{table}" ADD COLUMN "{c}" TEXT')
+        conn.commit()
+        log.warning(
+            "[%s] SCHEMA DRIFT: %s.%s — %d new API column(s) added via ALTER: %s. "
+            "Update the dbt staging model in lockstep.",
+            task_id, schema, table, len(new_cols), ", ".join(new_cols),
+        )
+        raw_cols = _raw_columns(conn, schema, table)
+    if missing_on_api_side:
+        log.warning(
+            "[%s] SCHEMA DRIFT: %s.%s — %d raw column(s) absent from API payload "
+            "(rename/removal?): %s",
+            task_id, schema, table, len(missing_on_api_side),
+            ", ".join(missing_on_api_side),
+        )
+    return raw_cols
+
+
+def _assert_complete(path: str, consumed: int, snapshot_total, seen: int) -> None:
+    """Fail loudly when pagination ended before the API's advertised row count."""
+    if snapshot_total is not None and consumed < snapshot_total:
+        raise RuntimeError(
+            f"{path}: pagination stopped after {consumed} rows but API reported "
+            f"total={snapshot_total} (offset={seen}) — refusing partial load"
+        )
+
+
 def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
     """Generator: yield one page of rows at a time, never accumulating all rows in memory.
 
@@ -242,20 +335,23 @@ def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
 
     When max_page_fetch is set the first request uses that limit (avoids offset-pagination
     race for small tables), then falls back to PAGE_SIZE for subsequent pages.
+
+    Transport errors and 5xx responses are retried (see _request_page) and raise
+    RuntimeError once retries are exhausted. If the API advertised a `total` and
+    pagination ends with fewer rows than that snapshot, RuntimeError is raised —
+    silently-dropped rows are a partial load posing as success.
     """
     url = f"{API_BASE}{path}"
     page_limit = max_page_fetch or PAGE_SIZE
     offset = 0
     snapshot_total = None
     pages = 0
+    fetched = 0
     timeout_s = 120 if max_page_fetch else 60
 
     while True:
         p = {**params, "limit": page_limit, "offset": offset}
-        resp = requests.get(url, params=p, timeout=timeout_s)
-        if resp.status_code >= 500:
-            log.warning("  %s: API returned %s — skipping (source API error)", path, resp.status_code)
-            return
+        resp = _request_page(url, p, timeout_s, path)
         resp.raise_for_status()
         data = resp.json()
         page = data if isinstance(data, list) else data.get("data", [])
@@ -266,6 +362,7 @@ def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
             log.info("  %s: API reports total=%d rows", path, snapshot_total)
 
         if not page:
+            _assert_complete(path, fetched, snapshot_total, offset)
             return
 
         pages += 1
@@ -275,11 +372,13 @@ def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
                 f"infinite loop detected on volatile endpoint (offset={offset})"
             )
 
+        fetched += len(page)
         log.info("  %s: fetched %d rows (offset=%d, page=%d)", path, len(page), offset, pages)
         yield page
 
         # Last page: returned fewer rows than requested
         if len(page) < page_limit:
+            _assert_complete(path, fetched, snapshot_total, offset + len(page))
             return
 
         offset += page_limit
@@ -326,8 +425,19 @@ def _upsert_rows(conn, schema: str, table: str, rows: list,
     if not rows:
         return 0
 
-    # Only insert columns present in both the raw table schema and the API response
-    insert_cols = [c for c in raw_cols if c in rows[0]]
+    # Only insert columns present in both the raw table schema and the API response.
+    # (After _detect_schema_drift ran on the first page, a drop here means the API
+    # grew a column mid-pagination — log it loudly instead of swallowing it.)
+    api_keys = set()
+    for row in rows[:50]:
+        api_keys.update(k for k in row.keys() if not k.startswith("_sdc"))
+    insert_cols = [c for c in raw_cols if c in api_keys]
+    dropped_cols = sorted(api_keys - set(raw_cols))
+    if dropped_cols:
+        log.warning(
+            "  %s.%s: %d API column(s) not in raw table (dropped this page): %s",
+            schema, table, len(dropped_cols), ", ".join(dropped_cols),
+        )
     all_cols = insert_cols + ["_sdc_extracted_at", "_sdc_batched_at", "_sdc_deleted_at"]
 
     col_sql = ", ".join(f'"{c}"' for c in all_cols)
@@ -442,6 +552,13 @@ def ingest_table(
                 raw_cols = _raw_columns(conn, raw_schema, raw_table)
                 table_exists = True
                 log.info("[%s] created table %s.%s", task_id, raw_schema, raw_table)
+            else:
+                # Schema-drift gate: API payload columns must be a superset check
+                # against raw columns — new ones ALTER+warn, vanished ones warn.
+                api_cols = list(page[0].keys())
+                raw_cols = _detect_schema_drift(
+                    conn, raw_schema, raw_table, api_cols, raw_cols, task_id
+                )
             n = _upsert_rows(conn, raw_schema, raw_table, page, pk_col, raw_cols, now_iso)
             written += n
             page_num += 1
@@ -474,7 +591,7 @@ default_args = {
 with DAG(
     dag_id="grocery_ingest_api",
     description=(
-        "API-based ingestion grocery source → EDW raw (27 tables, 8 schemas). "
+        "API-based ingestion grocery source → EDW raw (32 tables, 9 schemas). "
         "Alternative to Meltano tap-postgres. Pass {start_dt, end_dt} params "
         "for incremental backfill override."
     ),
