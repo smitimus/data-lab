@@ -17,6 +17,8 @@ STUB_SCENARIO:
   clean       marts complete, every bundled object present, nothing null
   broken      marts complete, every object present, but the bundle's own 18
               charts landed with query_context null (what dev shows today)
+  chart422    the dashboard import lands, but the chart refresh is rejected —
+              the charts keep the query_context they already had
   partial     3 bundled charts never landed (a silent partial import)
   nopg        the postgres container is not running
 """
@@ -52,7 +54,7 @@ CHART_NAMES = [n.rsplit("/", 1)[1][:-5].replace("_", " ") for n in objects("char
 
 # 42 is the gate's bar (dbt materialises 42 mart models); the bundled datasets
 # are part of that 42 on a real host, so fill up to 42 + the bundled ones.
-if SCENARIO in ("clean", "broken", "partial", "import422", "missingmart", "nologin"):
+if SCENARIO in ("clean", "broken", "partial", "import422", "chart422", "missingmart", "nologin"):
     ALL_MARTS = MART_TABLES + ["mart_extra_%02d" % i for i in range(1, 43)]
 else:
     ALL_MARTS = []

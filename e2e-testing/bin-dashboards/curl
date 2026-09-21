@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Stub `curl` for exercising install.sh's Superset dashboard step off-host.
 
-Handles the three calls the step makes: the health probe, the admin login, and
-the dashboard import. STUB_SCENARIO=import422 makes the import answer 422 with a
-per-object error body (the shape Superset 4.1.2 returns for a rejected bundle),
-and STUB_SCENARIO=nologin makes the login answer without a token.
+Handles the four calls the step makes: the health probe, the admin login, the
+dashboard import, and the chart refresh import (install.sh refreshes the bundle's
+charts through the chart importer, because the dashboard importer never
+overwrites an existing chart). STUB_SCENARIO=import422 makes the import answer 422
+with a per-object error body (the shape Superset 4.1.2 returns for a rejected
+bundle), STUB_SCENARIO=chart422 does the same for the chart refresh, and
+STUB_SCENARIO=nologin makes the login answer without a token.
 
 Every invocation is appended to $STUB_IMPORT_LOG so the test can assert the call
 shape (formData, the password map, overwrite=true, the auth header).
@@ -63,6 +66,67 @@ def main(argv):
                             "Dashboard already exists and `overwrite=true` was not passed"
                         ]
                     }
+                },
+                indent=2,
+            )
+            code = "422"
+        else:
+            body = json.dumps({"message": "OK"})
+            code = "200"
+    elif url.endswith("/chart/import/"):
+        # the bundle's charts, refreshed through the chart importer (the one that
+        # honours overwrite) — the dashboard importer never overwrites a chart.
+        # Read the formData file and check the derivation did its job: a chart
+        # import only accepts a Slice-typed metadata.yaml, and install.sh rewrites
+        # it (the bundle says Dashboard). A silently wrong copy would otherwise
+        # look identical to a good one from the outside.
+        import re as _re
+        import zipfile as _zipfile
+
+        form = ""
+        for i, a in enumerate(argv):
+            if a == "-F" and i + 1 < len(argv) and argv[i + 1].startswith("formData=@"):
+                form = argv[i + 1].split("@", 1)[1]
+        derived = ""
+        try:
+            with _zipfile.ZipFile(form) as _z:
+                meta = [n for n in _z.namelist() if n.endswith("metadata.yaml")][0]
+                derived = _z.read(meta).decode()
+        except Exception as exc:  # noqa: BLE001
+            derived = "could not read formData (%s)" % exc
+        m = _re.search(r"(?m)^type:\s*(\S+)", derived)
+        if SCENARIO == "chart422":
+            body = json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": "Error importing chart",
+                            "error_type": "GENERIC_COMMAND_ERROR",
+                            "level": "warning",
+                            "extra": {
+                                "charts/Chart_01_Daily_Revenue.yaml":
+                                    "Chart already exists and `overwrite=true` was not passed"
+                            },
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            code = "422"
+        elif not m or m.group(1) != "Slice":
+            body = json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": "Error importing chart",
+                            "extra": {
+                                "metadata.yaml": {
+                                    "type": "Must be one of: Slice (the chart copy carried %r)"
+                                            % (m.group(1) if m else derived[:80])
+                                }
+                            },
+                        }
+                    ]
                 },
                 indent=2,
             )

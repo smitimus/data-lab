@@ -421,8 +421,24 @@ def get_or_create_grocery_charts(token, datasets):
             print(f"  Skipping chart '{name}' — dataset not available")
             continue
         if name in existing:
-            print(f"  Chart '{name}' already exists (id={existing[name]})")
-            charts[name] = existing[name]
+            # An existing chart is reused, but only CREATION sets query_context. Charts seeded
+            # before _superset_query_context existed (or created via the dashboards zip import)
+            # are therefore permanent zombies: they render "Chart has no query context saved"
+            # and every reseed skips past them. Repair on the reuse path so a reseed heals them.
+            cid = existing[name]
+            from _superset_query_context import build_query_context
+            qc = build_query_context(ds_id, json.loads(chart_params), token, BASE)
+            if qc:
+                rr = requests.put(
+                    f"{BASE}/api/v1/chart/{cid}",
+                    headers=h(token),
+                    json={"query_context": qc},
+                )
+                state = "repaired" if rr.status_code in (200, 201) else f"repair FAILED: {rr.text}"
+            else:
+                state = "no query_context could be built"
+            print(f"  Chart '{name}' already exists (id={cid}) — query_context {state}")
+            charts[name] = cid
         else:
             from _superset_query_context import build_query_context
             r = requests.post(f"{BASE}/api/v1/chart/", headers=h(token), json={

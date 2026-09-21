@@ -115,6 +115,44 @@ python3 "$WORK/mkbundle.py" "$ZIP"
 [ -f "$ZIP" ] && ok "fixture bundle exists" || bad "fixture bundle missing"
 chmod +x "$H/bin-dashboards/docker" "$H/bin-dashboards/curl"
 
+echo
+echo "== the chart copy is derived with the stdlib only (a guest has no PyYAML) =="
+# Pull the shipped snippet out of install.sh and run it under `python3 -S`, which
+# disables site-packages — that is the bare Debian guest the deploy runs on, where
+# `import yaml` fails. The chart refresh silently did nothing there until the
+# derivation was rewritten against re/zipfile (found on dev 106, 2026-09-21).
+sed -n "/^bundle_charts_zip()/,/^}/p" "$SRC" \
+  | sed -n "/<<'PY'/,/^PY\$/p" | sed '1d;$d' > "$WORK/derive.py"
+if [ -s "$WORK/derive.py" ]; then
+  ok "extracted bundle_charts_zip() body ($(wc -l < "$WORK/derive.py") lines)"
+else
+  bad "could not extract bundle_charts_zip() from install.sh"
+fi
+rm -f "$WORK/charts-noyaml.zip"
+if python3 -S - "$ZIP" "$WORK/charts-noyaml.zip" < "$WORK/derive.py" >/dev/null 2>"$WORK/derive.err"; then
+  ok "the derivation runs under python3 -S (no site-packages)"
+else
+  bad "the derivation needs a module a guest does not have: $(tr '\n' ' ' < "$WORK/derive.err" | head -c 200)"
+fi
+DERIVED="$(python3 - "$WORK/charts-noyaml.zip" <<'PY' 2>/dev/null || true
+import re
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as z:
+    names = z.namelist()
+    meta = [n for n in names if n.endswith("metadata.yaml")][0]
+    print("type=%s dashboards=%d charts=%d datasets=%d"
+          % (re.search(r"(?m)^type:\s*(\S+)", z.read(meta).decode()).group(1),
+             sum(1 for n in names if "/dashboards/" in n),
+             sum(1 for n in names if "/charts/" in n),
+             sum(1 for n in names if "/datasets/" in n)))
+PY
+)"
+contains "the derived chart copy" "$DERIVED" "type=Slice"
+contains "the derived chart copy" "$DERIVED" "dashboards=0"
+contains "the derived chart copy" "$DERIVED" "charts=18"
+
 run_case() { # name expected_rc install_dir [extra VAR=VAL ...]
   local name="$1" want="$2" dir="$3"
   shift 3
@@ -140,6 +178,7 @@ contains clean "$CASE_OUT" "3/3 dashboards present in Superset"
 contains clean "$CASE_OUT" "18/18 charts present in Superset"
 contains clean "$CASE_OUT" "8/8 datasets present in Superset"
 contains clean "$CASE_OUT" "every chart has a query_context"
+contains clean "$CASE_OUT" "refreshed verisim_grocery_dashboards.zip charts"
 contains clean "$CASE_OUT" "dashboards: 14 (>= 11)"
 contains clean "$CASE_OUT" "per dashboard:"
 contains clean "$CASE_OUT" "dashboards-only complete."
@@ -165,6 +204,15 @@ contains import422 "$CASE_OUT" "HTTP 422"
 contains import422 "$CASE_OUT" "was not passed"
 contains import422 "$CASE_OUT" "nothing was imported: the request is atomic"
 absent import422 "$CASE_OUT" "imported verisim_grocery_dashboards.zip"
+
+echo
+echo "== the chart refresh is rejected (HTTP 422): exit 1, charts left as they were =="
+run_case chart422 1 "$WORK/tree"
+contains chart422 "$CASE_OUT" "imported verisim_grocery_dashboards.zip (HTTP 200, overwrite=true)"
+contains chart422 "$CASE_OUT" "chart refresh for verisim_grocery_dashboards.zip -> HTTP 422"
+contains chart422 "$CASE_OUT" "charts kept their old query_context"
+contains chart422 "$CASE_OUT" "Chart already exists and \`overwrite=true\` was not passed"
+contains chart422 "$CASE_OUT" "Superset dashboards incomplete"
 
 echo
 echo "== login refused: exit 1, nothing claimed as imported =="
@@ -214,6 +262,13 @@ echo "== the import call itself (formData + password map + overwrite + token) ==
 for needle in 'formData=@' 'databases/Grocery.yaml' '"overwrite=true"' 'Bearer STUB.TOKEN'; do
   if grep -qF -- "$needle" "$STUB_IMPORT_LOG"; then ok "import call carries $needle"; else bad "import call missing $needle"; fi
 done
+
+echo "== the bundle's charts are refreshed through the CHART importer =="
+if grep -qF '/api/v1/chart/import/' "$STUB_IMPORT_LOG"; then
+  ok "chart refresh posted to /api/v1/chart/import/ (the importer that honours overwrite)"
+else
+  bad "no chart refresh call — an existing chart would keep whatever query_context it had"
+fi
 
 echo
 echo "== install path still backgrounds the import behind the mart gate =="

@@ -377,11 +377,54 @@ else:
 }
 
 # ------------------------------------------------------------
+# bundle_charts_zip ZIP OUT — a chart-importable copy of a dashboard bundle.
+#
+# Superset's dashboard importer calls import_chart(config, overwrite=False)
+# (superset/commands/dashboard/importers/v1/__init__.py) — hardcoded — so a chart
+# that already exists is returned UNTOUCHED and the bundle's query_context never
+# reaches it. That is why an instance whose bundled charts were created before
+# the bundle carried a query_context stays broken through any number of
+# re-imports, and why the deploy has to refresh the charts itself.
+#
+# The CHART importer passes the caller's overwrite through, so re-submitting the
+# bundle's object set through /api/v1/chart/import/ is what actually updates
+# those charts. Two things make the copy acceptable to it: metadata.yaml declares
+# `type: Dashboard` and that command validates it against `Slice`, so it is
+# rewritten here; and the dashboards/ entries are dropped, because a chart
+# import has no schema for them (load_configs skips a prefix it has no schema
+# for, but so does the dashboard import re-run, which would be a no-op).
+# ------------------------------------------------------------
+bundle_charts_zip() { # ZIP OUT
+  # stdlib only: the guest is a bare Debian host (no PyYAML), which is also why
+  # zipquery above parses the bundle with re, not yaml. Only one line of
+  # metadata.yaml changes, so it is rewritten in place.
+  python3 - "$1" "$2" <<'PY' || return 1
+import re
+import sys
+import zipfile
+
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(src) as zin:
+    keep = [(i, zin.read(i.filename)) for i in zin.infolist()
+            if "/dashboards/" not in i.filename]
+with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+    for info, data in keep:
+        if info.filename.endswith("metadata.yaml"):
+            # what ImportChartsCommand validates against, in place of Dashboard
+            data, n = re.subn(r"(?m)^type:\s*\S+", "type: Slice", data.decode())
+            if n != 1:
+                raise SystemExit("metadata.yaml has no single `type:` line (found %d)" % n)
+            data = data.encode()
+        zout.writestr(info.filename, data)
+PY
+}
+
+# ------------------------------------------------------------
 # import_dashboards — 0 = every zip imported; 1 = at least one did not (detail
 # printed). Captures the HTTP status AND the response body of every import.
 # ------------------------------------------------------------
 import_dashboards() {
-  local tok zip pw_json code body rc=0
+  local tok zip pw_json code body rc=0 charts_zip ccode
   tok="$(curl -s --max-time 15 -X POST "$SUP_URL/api/v1/security/login" \
       -H 'Content-Type: application/json' \
       -d '{"username":"admin","password":"admin","provider":"db"}' \
@@ -399,14 +442,40 @@ import_dashboards() {
     # overwrite=true is what makes a re-run work at all: Superset 4.1.2 rejects
     # the whole bundle with 422 ("already exists and `overwrite=true` was not
     # passed") when a bundled dashboard uuid is already present, and that
-    # rejection is atomic. Existing charts/datasets are returned untouched by
-    # the importer, so repeating this is safe.
+    # rejection is atomic. Note that it only governs the DASHBOARDS: existing
+    # charts and datasets are returned untouched, which is why the chart refresh
+    # below is a separate call.
     code="$(curl -s --max-time 300 -o "$body" -w '%{http_code}' \
         -X POST "$SUP_URL/api/v1/dashboard/import/" \
         -H "Authorization: Bearer ${tok}" -H 'Accept: application/json' \
         -F "formData=@$zip" -F "passwords=$pw_json" -F 'overwrite=true' 2>/dev/null || echo 000)"
     if [[ "$code" == "200" ]]; then
       log "imported $(basename "$zip") (HTTP 200, overwrite=true)"
+      # ...but the dashboard import never overwrites an existing CHART (see
+      # bundle_charts_zip), so the bundle's charts are refreshed through the
+      # chart importer, which does. Without this an instance that already has the
+      # bundle's charts keeps whatever query_context they were created with —
+      # exactly the state verify_superset() below fails on.
+      charts_zip="$(mktemp --suffix=.zip)"
+      if bundle_charts_zip "$zip" "$charts_zip"; then
+        cbody="$(mktemp)"
+        ccode="$(curl -s --max-time 300 -o "$cbody" -w '%{http_code}' \
+            -X POST "$SUP_URL/api/v1/chart/import/" \
+            -H "Authorization: Bearer ${tok}" -H 'Accept: application/json' \
+            -F "formData=@$charts_zip" -F "passwords=$pw_json" -F 'overwrite=true' 2>/dev/null || echo 000)"
+        if [[ "$ccode" == "200" ]]; then
+          log "  refreshed $(basename "$zip") charts (HTTP 200, overwrite=true)"
+        else
+          warn "  chart refresh for $(basename "$zip") -> HTTP $ccode (charts kept their old query_context)"
+          report_import_body "$cbody"
+          rc=1
+        fi
+        rm -f "$cbody"
+      else
+        warn "  could not derive a chart copy of $(basename "$zip") — charts not refreshed"
+        rc=1
+      fi
+      rm -f "$charts_zip"
     else
       warn "import $(basename "$zip") -> HTTP $code (nothing was imported: the request is atomic)"
       report_import_body "$body"
