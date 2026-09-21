@@ -3,8 +3,9 @@ Grocery Complete Pipeline DAG
 ==============================
 Runs the full grocery pipeline end-to-end:
   0. wait_for_verisim_readiness — gate on the source being ready (see
-     verisim_readiness.py)
-  1. grocery_ingest_api  — load all 27 source tables into raw_* schemas
+     verisim_readiness.py: the source must serve every relation this pipeline
+     ingests, so the gate cannot pass while the ingest would fail)
+  1. grocery_ingest_api  — load all 32 source tables into raw_* schemas
   2. grocery_dbt         — transform raw → staging → marts
   3. grocery_freshness   — check source freshness (via grocery_dbt DAG)
 
@@ -42,6 +43,8 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     schedule="0 */6 * * *",
     catchup=False,
+    # LOAD-BEARING — do not remove (t_657cebc3). This DAG triggers the ingest,
+    # so two of its runs in flight means two ingests in flight on one EDW.
     max_active_runs=1,
     tags=["grocery", "pipeline"],
 ) as dag:
@@ -49,7 +52,8 @@ with DAG(
     # --- Source readiness gate ------------------------------------------------
     # `mode="reschedule"` frees the worker slot between pokes, so waiting for a
     # fresh host's 30-day backfill costs nothing but a queued task. On a ready
-    # source this costs exactly one poke (~200 ms).
+    # source this costs exactly one poke (~1 s: three state requests plus a
+    # `limit=1` probe per ingested relation).
     wait_for_verisim = PythonSensor(
         task_id="wait_for_verisim_readiness",
         python_callable=is_ready,
@@ -58,8 +62,12 @@ with DAG(
         timeout=timedelta(minutes=READINESS_TIMEOUT_MIN),
         doc_md=(
             "Waits until verisim-grocery is serving data: API healthy, generator "
-            "running in `realtime` mode (bootstrap + backfill finished), and the "
-            "critical source tables non-empty. Prevents the first run on a fresh "
+            "running in `realtime` mode (bootstrap + backfill finished), and every "
+            "source relation this pipeline ingests (the 32 in "
+            "`grocery_ingest_api.TABLE_CONFIGS`) served and non-empty. The probe list "
+            "is derived from that registry, so the gate cannot pass while the ingest "
+            "would fail — a source missing a table blocks HERE, named by relation, "
+            "instead of failing five ingest tasks. Prevents the first run on a fresh "
             "install from racing verisim's self-bootstrap. Tuning: "
             "`VERISIM_READINESS_TIMEOUT_MIN`, `VERISIM_READINESS_POKE_S`."
         ),

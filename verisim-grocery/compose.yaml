@@ -7,12 +7,37 @@
 #
 # 260321 - initial setup
 # 260404 - replaced dev build with standalone release image
+# 260921 - PINNED BY DIGEST (was `:latest`). See the note on `image:` below.
 
 services:
 
   verisim-grocery:
     container_name: verisim-grocery
-    image: smiti/verisim-grocery:latest
+    # PINNED BY DIGEST — do not put a floating tag back here.
+    #
+    # `smiti/verisim-grocery:latest` was not a version: on 2026-09-21 dev (106) and
+    # test (107) ran the SAME tag with different bytes — dev a 07:45 build that serves
+    # online.orders/order_items/order_events and pos.returns/return_items, test the
+    # 3-week-old 1.3.2 that Docker Hub's `latest` still pointed at. 5 of the 32
+    # relations grocery_complete_pipeline ingests were unservable, so the readiness
+    # sensor held the run and it read as a hang hours later (t_9f544379, t_6543a6fe).
+    #
+    # A digest cannot move: this file alone decides which code a slot runs, both slots
+    # resolve it to the same bytes, and a fresh slot either gets these exact bytes or
+    # fails loudly at `compose up` instead of coming up behind. `latest` is also why
+    # this class cost us twice (the earlier minio `:latest` namespace went unpullable).
+    #
+    # The build: verisim 4ec85ec (t_6d2ebc52, insert-clock windows on the transaction
+    # and order routes), built 2026-09-21T07:45Z, carried between hosts as the dated
+    # tag `smiti/verisim-grocery:dev-2026-09-21-0745`. It is NOT in the registry yet —
+    # `docker pull smiti/verisim-grocery@sha256:2900dbc…` is a 404. When verisim-dev
+    # publishes a release (t_6543a6fe) re-pin this line to the published reference,
+    # which is a deliberate, reviewable edit — not a tag that drifts underneath us.
+    image: smiti/verisim-grocery@sha256:2900dbc0073610ecaa749fd1f2bbfb1c9cf8fae9d26ca7256d21c91c7e5f56e4
+    # A digest pin is immutable, so a pull can only re-fetch the same bytes or fail:
+    # `missing` keeps `compose up` from chasing a registry manifest that does not exist
+    # on a host that already holds the pinned image.
+    pull_policy: missing
     ports:
       - "${VERISIM_POSTGRES_PORT:-5499}:5432"
       - "${VERISIM_API_PORT:-8010}:8000"

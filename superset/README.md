@@ -16,7 +16,7 @@ BI and dashboarding platform. Pre-loaded with dashboards built on the verisim gr
 - `stacks/superset/dashboards/` — Exported dashboard JSON files for import
 
 ## Usage Notes
-- **Dashboard import:** Superset auto-imports dashboards from `stacks/superset/dashboards/` during `install.sh`. Manual import: Dashboards → ⋮ → Import → select JSON file.
+- **Dashboard import:** `install.sh` imports `superset/dashboards/*.zip` in the background once Superset is healthy — but only after the marts exist, because each bundled dataset needs its `mart` table. On a fresh install it defers (the first pipeline run has not happened yet); re-run it once the DAG has populated the marts with `bash /opt/data-lab/install.sh --dashboards-only`, which imports idempotently (`overwrite=true`) and reports per object. Manual import: Dashboards → ⋮ → Import → select the zip.
 - **Adding a database connection:** Settings → Database Connections → + Database → PostgreSQL
   - Host: `postgres`, Port: `5432`, Database: `edw`, User: `postgres`, Password: `postgres`
 - **First login:** admin / admin → prompted to change password (optional, skip for lab use)

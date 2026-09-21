@@ -58,6 +58,17 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW__CORE__LOGGING_LEVEL: INFO
     IP: ${IP}
+    # A task that sits in `queued` longer than this is requeued, and after the
+    # requeue attempts run out the scheduler marks it **failed without it ever
+    # having run** (no task log at all — start == end). On 2026-09-21 that
+    # silently failed two ingest tasks nobody could diagnose from their logs:
+    # `ingest_inv.inv_receipts` (queued 02:14:08, marked failed 02:26:07) and
+    # `ingest_inv.inv_receipt_items`, because both worker slots were held by
+    # long-running tasks (t_7c88f2f9). 600s (the default) is too short for a
+    # 31-task DAG on a shared pool; 1800s keeps a queue wait from turning into a
+    # phantom failure. Trade-off, stated deliberately: a *genuinely* stuck task
+    # now takes 30 min instead of 10 to surface.
+    AIRFLOW__SCHEDULER__TASK_QUEUED_TIMEOUT: "1800"
     AIRFLOW__WEBSERVER__BASE_URL: http://${IP}:${AIRFLOW_PORT:-8080}
     AIRFLOW__LOGGING__LOG_URL: http://${IP}:${AIRFLOW_PORT:-8080}/log/{{ dag_id
       }}/{{ task_id }}/{{ execution_date }}/{{ try_number }}.log
@@ -194,7 +205,18 @@ services:
     environment:
       <<: *a3
       DUMB_INIT_SETSID: "0"
-      AIRFLOW__CELERY__WORKER_CONCURRENCY: "2"
+      # Sized up from the previous "2": `grocery_ingest_api` has 31 tasks on this
+      # shared pool, and while `grocery_complete_pipeline.ingest` (a blocking
+      # monitor that polls the child run, up to its 2h execution_timeout) held
+      # one slot and a long ingest task held the other, a third task had nowhere
+      # to run and the scheduler failed it after the queued timeout, without ever
+      # starting it (t_7c88f2f9). The guest has 12 vCPU and 8 GB; 4 keeps two
+      # slots free while the monitor waits. Bounded on purpose: the monitor still
+      # polls *in* a worker slot (TriggerDagRunOperator(deferrable=False))
+      # because `execution_timeout` — the only cap on a child run that never
+      # finishes — is not enforced on a deferred task. Do not "fix" the slot cost
+      # by deferring without adding a bounded wait.
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
     restart: always
     depends_on:
       <<: *a2

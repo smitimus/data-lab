@@ -16,21 +16,33 @@ set -euo pipefail
 #   8.  Run init.sh (seed _conf/ dirs)
 #   9.  Run start.sh (bring up all stacks)
 #   10. Wait for Dockhand, then auto-adopt all stacks
-#   11. Launch background job: wait for Superset, then auto-import dashboards
+#   11. Launch background job: wait for Superset, then import the bundled
+#       dashboards — but only once the marts exist. Before the first `transform`
+#       their datasets have no tables behind them and the charts land unable to
+#       render, so the import DEFERS there and names the re-run command
+#       (`install.sh --dashboards-only`, see the block above main).
 #   12. Print service table with URLs and default credentials
 # =============================================================
 
 # GitHub repo to clone and the preferred install location.
 # FALLBACK_DIR is used if /opt is not writable by the current user.
+# INSTALL_DIR can be overridden from the environment — `--dashboards-only` uses
+# that (and FALLBACK_DIR) to find the tree it is re-running the import against.
 REPO_URL="https://github.com/smitimus/data-lab.git"
-INSTALL_DIR="/opt/data-lab"
+INSTALL_DIR="${INSTALL_DIR:-/opt/data-lab}"
 FALLBACK_DIR="${HOME}/data-lab"
 
 # AUTO_YES=true skips all interactive prompts (set via -y / --yes flag).
 # Used for automated testing; equivalent to pressing Enter/Y at every prompt.
+# DASHBOARDS_ONLY=1 (--dashboards-only) runs just the bundled-dashboard import
+# against an already-installed host; see the block above main.
 AUTO_YES=false
+DASHBOARDS_ONLY=0
 for arg in "$@"; do
-  [[ "$arg" == "-y" || "$arg" == "--yes" ]] && AUTO_YES=true
+  case "$arg" in
+    -y|--yes)          AUTO_YES=true ;;
+    --dashboards-only) DASHBOARDS_ONLY=1 ;;
+  esac
 done
 
 # ANSI color codes for terminal output. NC = No Color (reset).
@@ -204,46 +216,314 @@ wait_for_superset() {
 }
 
 # ------------------------------------------------------------
-# import_dashboards — authenticates to Superset's REST API and imports
-# every .zip file found in the repo's superset/dashboards/ directory.
-# Dashboard zips are pre-exported from a configured Superset instance
-# and bundled with the repo for automatic provisioning.
+# Superset dashboards — import the bundled zips only once the marts exist,
+# then report per object what actually landed. Same contract as
+# scripts/app-layer.sh step 8b on the infra host, so both hosts behave alike.
+#
+# The zips in superset/dashboards/ carry one Superset dataset per mart table.
+# Imported before the first `transform` has run — which at install time is
+# always the case, the first pipeline run is triggered by hand afterwards —
+# those datasets have no table behind them, the charts land unable to render,
+# and Superset still answers HTTP 200 {"message": "OK"} for a bundle it only
+# partly placed, 422 for one it rejected. The old step threw the response body
+# away (`> /dev/null`) and logged "Imported <zip>" for any status curl could
+# complete, so a rejected or half-landed bundle looked exactly like a good one.
+# Dev, 2026-09-21: 18 charts with query_context null — exactly this bundle's
+# charts — which is what the gate fails on (e2e-testing/full-cycle.sh phase 8).
+#
+# So this block: waits (bounded) for the mart schema and DEFERS loudly, naming
+# the re-run command, when it is not there yet; imports idempotently with
+# overwrite=true; then reads Superset's own meta DB and reports per object,
+# plus the gate's own two assertions (datasource_id, query_context). Deferred
+# is not a failure — but an import that ran and left Superset incomplete is,
+# and it is the exit status of `--dashboards-only` (DASH_STRICT=0 downgrades it).
+# ------------------------------------------------------------
+SUP_URL="${SUP_URL:-http://localhost:8088}"
+SUP_META_DB="${SUP_META_DB:-superset}"   # Superset's own meta DB, in the postgres container
+EDW_DB="${EDW_DB:-grocery}"              # the DB holding the mart schema
+DASH_DIR="${DASH_DIR:-}"                 # defaulted against INSTALL_DIR in superset_dashboards()
+MART_MIN="${MART_MIN:-42}"               # the gate's bar: 42 mart relations (full-cycle.sh 8b)
+DASH_MIN="${DASH_MIN:-11}"               # the gate's bar: 11+ dashboards
+DASH_WAIT="${DASH_WAIT:-120}"            # seconds to wait for the first transform
+DASH_STRICT="${DASH_STRICT:-1}"          # 1 = an incomplete import fails the re-run
+
+# ------------------------------------------------------------
+# psql_q DB SQL -> rows, unaligned, no trailing blanks (empty on any failure).
+# Reads Superset's own meta DB and the EDW through the running postgres
+# container; every failure is an empty answer, never a set -e abort.
+# ------------------------------------------------------------
+psql_q() {
+  { docker exec postgres psql -U postgres -d "$1" -tAc "$2" 2>/dev/null || true; } | sed 's/[[:space:]]*$//'
+}
+
+# ------------------------------------------------------------
+# zipquery ZIP MODE(tables|counts|passwords|uuids:KIND) — read the bundle
+# itself, no Superset needed: which mart tables it expects, the password map
+# the importer wants, and the uuid of every object it carries.
+# ------------------------------------------------------------
+zipquery() {
+  python3 -c '
+import json, re, sys, zipfile
+
+path, mode = sys.argv[1], sys.argv[2]
+z = zipfile.ZipFile(path)
+names = [n for n in z.namelist() if n.endswith(".yaml")]
+
+def field(name, key):
+    body = z.read(name).decode("utf-8", "replace")
+    m = re.search(r"^" + key + r":\s*(\S+)", body, re.M)
+    return m.group(1) if m else None
+
+def label(name):
+    # full value, spaces included (slice_name / dashboard_title carry them)
+    body = z.read(name).decode("utf-8", "replace")
+    for key in ("slice_name", "dashboard_title", "table_name"):
+        m = re.search(r"^" + key + r":\s*(.+?)\s*$", body, re.M)
+        if m:
+            return m.group(1).strip().strip("\"")
+    return name.rsplit("/", 1)[1][:-5]
+
+def of(kind):
+    return [n for n in names if ("/" + kind + "/") in n]
+
+if mode == "tables":
+    for n in of("datasets"):
+        print("%s.%s" % (field(n, "schema") or "mart", field(n, "table_name")))
+elif mode == "counts":
+    print(" ".join("%s=%d" % (k, len(of(k))) for k in ("dashboards", "charts", "datasets", "databases")))
+elif mode == "passwords":
+    print(json.dumps({n.split("/", 1)[1]: "postgres" for n in of("databases")}))
+elif mode.startswith("uuids:"):
+    for n in of(mode.split(":", 1)[1]):
+        u = field(n, "uuid")
+        if u:
+            print("%s\t%s" % (u.lower(), label(n)))
+' "$1" "$2" 2>/dev/null || true
+}
+
+count_matches() { # NEEDLES HAYSTACK -> how many needles appear exactly in haystack
+  { printf '%s\n' "$1" | grep -Fxf <(printf '%s\n' "$2") || true; } | grep -c . || true
+}
+missing_of() {    # NEEDLES HAYSTACK -> the needles absent from haystack
+  printf '%s\n' "$1" | grep -Fxv -f <(printf '%s\n' "$2") || true
+}
+
+needed_mart_tables() { # every mart table the bundled dashboards need, deduped
+  local zip
+  for zip in "$DASH_DIR"/*.zip; do
+    [[ -f "$zip" ]] || continue
+    zipquery "$zip" tables
+  done | sort -u
+}
+
+# ------------------------------------------------------------
+# wait_for_marts — 0 = the first transform has landed, 1 = it has not (and
+# says what is missing). `information_schema.tables where table_schema='mart'`
+# is the cheap probe: dbt materialises all 42 mart models as tables, so the
+# count climbs as the CTAS statements land. Bounded by DASH_WAIT.
+# ------------------------------------------------------------
+wait_for_marts() {
+  local waited=0 n=0 have="" missing="" needed
+  needed="$(needed_mart_tables)"
+  if [[ -z "$needed" ]]; then
+    log "bundled dashboards reference no mart tables"
+    return 0
+  fi
+  while :; do
+    have="$(psql_q "$EDW_DB" "select table_name from information_schema.tables where table_schema='mart'")"
+    n="$(printf '%s\n' "$have" | grep -c . || true)"
+    missing="$(missing_of "$(printf '%s\n' "$needed" | cut -d. -f2)" "$have")"
+    if [[ -z "$missing" && "${n:-0}" -ge "$MART_MIN" ]]; then
+      log "marts ready: $n tables in mart, every bundled dataset resolves"
+      return 0
+    fi
+    if [[ "$waited" -ge "$DASH_WAIT" ]]; then
+      if [[ -n "$missing" ]]; then
+        warn "marts still missing after ${waited}s: $(printf '%s' "$missing" | tr '\n' ' ')"
+      fi
+      warn "mart tables: ${n:-0} (need >= $MART_MIN) — the first transform has not finished"
+      return 1
+    fi
+    if [[ $((waited % 60)) -eq 0 ]]; then
+      log "waiting for the first transform: ${n:-0} marts, ${waited}s/${DASH_WAIT}s${missing:+, missing: $(printf '%s' "$missing" | tr '\n' ' ')}"
+    fi
+    sleep 20; waited=$((waited + 20))
+  done
+}
+
+# ------------------------------------------------------------
+# report_import_body FILE — Superset reports per-object failures in the
+# response body only (the HTTP status alone cannot distinguish "imported
+# everything" from "dropped half the bundle"), so the body is printed, not
+# discarded.
+# ------------------------------------------------------------
+report_import_body() {
+  [[ -s "$1" ]] || { warn "  (empty response body)"; return 0; }
+  python3 -c '
+import json, sys
+
+raw = open(sys.argv[1]).read().strip()
+try:
+    doc = json.loads(raw)
+except Exception:
+    print("    " + raw[:1000].replace("\n", " "))
+    raise SystemExit(0)
+if isinstance(doc, dict) and len(doc) == 1 and isinstance(doc.get("message"), str):
+    print("    " + doc["message"])
+else:
+    for line in json.dumps(doc, indent=2)[:1500].splitlines():
+        print("    " + line)
+' "$1" || true
+}
+
+# ------------------------------------------------------------
+# import_dashboards — 0 = every zip imported; 1 = at least one did not (detail
+# printed). Captures the HTTP status AND the response body of every import.
 # ------------------------------------------------------------
 import_dashboards() {
-  # POST admin credentials to obtain a short-lived JWT access token.
-  local token
-  token=$(curl -s -X POST http://localhost:8088/api/v1/security/login \
-    -H "Content-Type: application/json" \
-    -d '{"username":"admin","password":"admin","provider":"db"}' \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
-
-  if [[ -z "$token" ]]; then
-    warn "Could not authenticate to Superset — skipping dashboard import."
+  local tok zip pw_json code body rc=0
+  tok="$(curl -s --max-time 15 -X POST "$SUP_URL/api/v1/security/login" \
+      -H 'Content-Type: application/json' \
+      -d '{"username":"admin","password":"admin","provider":"db"}' \
+      | python3 -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null || true)"
+  if [[ -z "$tok" ]]; then
+    warn "could not authenticate to Superset (admin/admin) — dashboards NOT imported"
+    warn "  re-run once Superset is healthy: bash ${INSTALL_DIR}/install.sh --dashboards-only"
     return 1
   fi
-
-  # Import each zip.  The `passwords` field supplies the database password
-  # Superset needs to recreate the EDW connection definition bundled in the zip.
-  for zip in "${INSTALL_DIR}"/superset/dashboards/*.zip; do
+  for zip in "$DASH_DIR"/*.zip; do
     [[ -f "$zip" ]] || continue
-    log "Importing dashboard: $(basename "$zip")"
-    # Build passwords JSON from every databases/*.yaml found in the zip,
-    # all using the shared postgres superuser password.
-    local pw_json
-    pw_json=$(python3 -c "
-import zipfile, json, sys
-with zipfile.ZipFile('${zip}') as z:
-    dbs = [n.split('/', 1)[1] for n in z.namelist()
-           if '/databases/' in n and n.endswith('.yaml')]
-    print(json.dumps({db: 'postgres' for db in dbs}))
-")
-    curl -s -X POST http://localhost:8088/api/v1/dashboard/import/ \
-      -H "Authorization: Bearer $token" \
-      -H "Accept: application/json" \
-      -F "formData=@${zip}" \
-      -F "passwords=${pw_json}" \
-      > /dev/null && log "Imported $(basename "$zip")" || warn "Failed to import $(basename "$zip")"
+    pw_json="$(zipquery "$zip" passwords || echo '{}')"
+    [[ -n "$pw_json" ]] || pw_json='{}'
+    body="$(mktemp)"
+    # overwrite=true is what makes a re-run work at all: Superset 4.1.2 rejects
+    # the whole bundle with 422 ("already exists and `overwrite=true` was not
+    # passed") when a bundled dashboard uuid is already present, and that
+    # rejection is atomic. Existing charts/datasets are returned untouched by
+    # the importer, so repeating this is safe.
+    code="$(curl -s --max-time 300 -o "$body" -w '%{http_code}' \
+        -X POST "$SUP_URL/api/v1/dashboard/import/" \
+        -H "Authorization: Bearer ${tok}" -H 'Accept: application/json' \
+        -F "formData=@$zip" -F "passwords=$pw_json" -F 'overwrite=true' 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      log "imported $(basename "$zip") (HTTP 200, overwrite=true)"
+    else
+      warn "import $(basename "$zip") -> HTTP $code (nothing was imported: the request is atomic)"
+      report_import_body "$body"
+      rc=1
+    fi
+    rm -f "$body"
   done
+  return $rc
+}
+
+sup_uuid_list() { # KIND(dashboards|charts|datasets) -> every uuid Superset already has
+  case "$1" in
+    dashboards) psql_q "$SUP_META_DB" "select uuid from dashboards" ;;
+    charts)     psql_q "$SUP_META_DB" "select uuid from slices" ;;
+    datasets)   psql_q "$SUP_META_DB" "select uuid from tables" ;;
+  esac | tr 'A-Z' 'a-z'
+}
+
+check_zip_landed() { # ZIP — per-object: did every bundled object make it into Superset?
+  local zip="$1" kind pairs uuids have total landed bad=0
+  for kind in dashboards charts datasets; do
+    pairs="$(zipquery "$zip" "uuids:$kind")"
+    total="$(printf '%s\n' "$pairs" | grep -c . || true)"
+    [[ "${total:-0}" -gt 0 ]] || continue
+    uuids="$(printf '%s' "$pairs" | cut -f1)"
+    have="$(sup_uuid_list "$kind")"
+    landed="$(count_matches "$uuids" "$have")"
+    if [[ "$landed" == "$total" ]]; then
+      log "  $(basename "$zip"): $landed/$total $kind present in Superset"
+    else
+      warn "$(basename "$zip"): only $landed/$total $kind present — MISSING:"
+      missing_of "$uuids" "$have" | while IFS= read -r u; do
+        [[ -n "$u" ]] || continue
+        printf '%s\n' "$pairs" | grep -F "$u" | cut -f2 | sed 's/^/      /'
+      done
+      bad=1
+    fi
+  done
+  return $bad
+}
+
+verify_superset() { # 0 = the metaschema passes the gate's own dashboard assertions
+  local n_dash n_charts n_null_ds n_null_qc per dead bad=0
+  n_dash="$(psql_q "$SUP_META_DB" 'select count(*) from dashboards')"
+  n_charts="$(psql_q "$SUP_META_DB" 'select count(*) from slices')"
+  n_null_ds="$(psql_q "$SUP_META_DB" 'select count(*) from slices where datasource_id is null')"
+  n_null_qc="$(psql_q "$SUP_META_DB" 'select count(*) from slices where query_context is null')"
+  per="$(psql_q "$SUP_META_DB" "select string_agg(t, '  ' order by t) from (select d.id || '=' || count(*) || ' ' || d.dashboard_title as t from dashboard_slices ds join dashboards d on d.id = ds.dashboard_id group by d.id, d.dashboard_title) s")"
+
+  log "superset meta: ${n_dash:-0} dashboards, ${n_charts:-0} charts"
+  echo "        per dashboard: ${per:-none}"
+
+  if [[ "${n_dash:-0}" -lt "$DASH_MIN" ]]; then
+    warn "dashboards: ${n_dash:-0} (< $DASH_MIN) — the scripted seed (superset/setup.py + create_*)"
+    warn "  has not run since the marts appeared; re-run its service:"
+    warn "    docker compose -f superset/compose.yaml up -d --force-recreate superset-setup"
+    warn "  (the zip import cannot make up this shortfall — it only adds its own dashboards)"
+    bad=1
+  else
+    log "dashboards: ${n_dash:-0} (>= $DASH_MIN)"
+  fi
+  if [[ "${n_null_ds:-0}" -eq 0 ]]; then
+    log "every chart has a datasource_id"
+  else
+    warn "$n_null_ds charts have no datasource_id — they cannot render"
+    bad=1
+  fi
+  if [[ "${n_null_qc:-0}" -eq 0 ]]; then
+    log "every chart has a query_context"
+  else
+    dead="$(psql_q "$SUP_META_DB" "select string_agg(t, ', ') from (select slice_name as t from slices where query_context is null order by slice_name limit 8) s")"
+    warn "$n_null_qc charts have no query_context — those tiles fail with"
+    warn "  'Chart has no query context saved. Please save the chart again.'"
+    warn "  first 8: ${dead:-?}"
+    bad=1
+  fi
+  return $bad
+}
+
+# ------------------------------------------------------------
+# superset_dashboards — 0 = imported and complete, or legitimately deferred;
+# 1 = the import ran and left Superset incomplete.
+# ------------------------------------------------------------
+superset_dashboards() {
+  local zip rc=0
+  [[ -n "$DASH_DIR" ]] || DASH_DIR="${INSTALL_DIR}/superset/dashboards"
+  if ! compgen -G "$DASH_DIR/*.zip" >/dev/null 2>&1; then
+    log "no bundled dashboards — nothing to import"
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "docker missing — cannot reach Superset"
+    return 1
+  fi
+  if ! docker inspect -f '{{.State.Running}}' postgres 2>/dev/null | grep -q true; then
+    warn "postgres is not running — dashboards NOT imported; re-run:"
+    warn "  bash ${INSTALL_DIR}/install.sh --dashboards-only"
+    return 0
+  fi
+  if ! curl -sf --max-time 5 "$SUP_URL/health" -o /dev/null 2>/dev/null; then
+    warn "Superset not healthy at $SUP_URL — dashboards NOT imported; re-run:"
+    warn "  bash ${INSTALL_DIR}/install.sh --dashboards-only"
+    return 0
+  fi
+  if ! wait_for_marts; then
+    warn "deferred: importing now would ship charts whose datasets have no tables behind them"
+    warn "  re-run once the first transform has landed, on this host:"
+    warn "    bash ${INSTALL_DIR}/install.sh --dashboards-only"
+    return 0
+  fi
+  import_dashboards || rc=1
+  for zip in "$DASH_DIR"/*.zip; do
+    [[ -f "$zip" ]] || continue
+    check_zip_landed "$zip" || rc=1
+  done
+  verify_superset || rc=1
+  return $rc
 }
 
 # ------------------------------------------------------------
@@ -271,6 +551,9 @@ print_services() {
   echo "Next steps:"
   echo "  1. Trigger the first Airflow DAG: Airflow UI → DAGs → grocery_pipeline → ▶"
   echo "  2. After the DAG completes, check Superset dashboards for data"
+  echo "  3. The bundled dashboard import defers until the marts exist (it is"
+  echo "     skipped while the mart schema is empty). Once the DAG has run:"
+  echo "       bash ${INSTALL_DIR}/install.sh --dashboards-only"
   echo ""
 }
 
@@ -423,14 +706,25 @@ main() {
   adopt_stacks
 
   # --- Auto-import Superset dashboards (background) ------------------------
-  # superset init takes 20-40 min on first run, so the wait+import runs in
-  # the background. install.sh exits immediately after printing the service
-  # table; the import completes on its own and logs to SUPERSET_LOG.
+  # superset init takes 20-40 min on first run, so the wait runs in the
+  # background. install.sh exits after printing the service table; the import
+  # completes on its own and logs to SUPERSET_LOG.
+  #
+  # The import is gated on the marts (see superset_dashboards) and normally
+  # DEFERS here: the first `transform` is an Airflow run away — the operator has
+  # not even triggered the DAG yet — so importing the bundle now would land its
+  # charts with no tables behind them. Deferred is not a failure and this
+  # background job cannot carry the install's exit status; the verdict belongs
+  # to `--dashboards-only`, the re-run the deferral names.
   local SUPERSET_LOG=/tmp/superset-import.log
   (
     if wait_for_superset; then
-      import_dashboards
-      log "Dashboard import complete."
+      if superset_dashboards; then
+        log "Dashboard import complete."
+      else
+        warn "Dashboard import INCOMPLETE — see the report above."
+        warn "  re-run once the marts exist: bash ${INSTALL_DIR}/install.sh --dashboards-only"
+      fi
     fi
   ) >> "$SUPERSET_LOG" 2>&1 &
   log "Superset dashboard import running in background — tail $SUPERSET_LOG to monitor"
@@ -438,5 +732,37 @@ main() {
   # --- Done ----------------------------------------------------------------
   print_services "$IP"
 }
+
+# ============================================================
+# --dashboards-only — re-run just the bundled-dashboard import against an
+# already-installed host (no clone, no start.sh, no prompts). This is the
+# re-run the deferred message points at, and it is where the import's verdict
+# decides an exit status: `err` (exit 1) when the import ran and left Superset
+# incomplete, `DASH_STRICT=0` to downgrade that to a warning. Idempotent
+# (overwrite=true), so it is safe to repeat.
+#
+# install.sh has no state file and no machine claim to fold the verdict into —
+# and the install path's import runs in a background subshell, so the install's
+# own exit status cannot carry it. This mode is the single place that can, which
+# is why the verdict lives here instead of a stray `exit 1` at the bottom.
+# ============================================================
+if [[ "$DASHBOARDS_ONLY" == "1" ]]; then
+  # No clone in this mode: use the tree we were pointed at, else the fallback.
+  [[ -d "$INSTALL_DIR" || ! -d "$FALLBACK_DIR" ]] || INSTALL_DIR="$FALLBACK_DIR"
+  [[ -d "$INSTALL_DIR" ]] || err "no installed tree at ${INSTALL_DIR} (set INSTALL_DIR=/path/to/data-lab)"
+  cd "$INSTALL_DIR"
+  command -v docker >/dev/null 2>&1 || err "docker not found on this host"
+  log "Superset dashboards only (--dashboards-only) in ${INSTALL_DIR}"
+  DASH_BAD=0
+  superset_dashboards || DASH_BAD=1
+  if [[ "$DASH_BAD" == "1" && "$DASH_STRICT" == "1" ]]; then
+    err "Superset dashboards incomplete — see the report above."
+  fi
+  if [[ "$DASH_BAD" == "1" ]]; then
+    warn "Superset dashboards incomplete — DASH_STRICT=0, so this run still exits 0."
+  fi
+  log "dashboards-only complete."
+  exit 0
+fi
 
 main "$@"

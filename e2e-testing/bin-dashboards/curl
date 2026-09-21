@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Stub `curl` for exercising install.sh's Superset dashboard step off-host.
+
+Handles the three calls the step makes: the health probe, the admin login, and
+the dashboard import. STUB_SCENARIO=import422 makes the import answer 422 with a
+per-object error body (the shape Superset 4.1.2 returns for a rejected bundle),
+and STUB_SCENARIO=nologin makes the login answer without a token.
+
+Every invocation is appended to $STUB_IMPORT_LOG so the test can assert the call
+shape (formData, the password map, overwrite=true, the auth header).
+"""
+import json
+import os
+import sys
+
+SCENARIO = os.environ.get("STUB_SCENARIO", "clean")
+TOKEN = "STUB.TOKEN"
+
+VALUE_FLAGS = ("-o", "-w", "-H", "-F", "-d", "-X", "--max-time", "--connect-timeout")
+
+
+def parse(argv):
+    """-> (url, out_path, write_format)"""
+    url = out = wfmt = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in VALUE_FLAGS:
+            if a == "-o":
+                out = argv[i + 1]
+            elif a == "-w":
+                wfmt = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("-"):  # -s, -sf, -f, -L, ... — no value
+            i += 1
+            continue
+        url = a
+        i += 1
+    return url, out, wfmt
+
+
+def main(argv):
+    url, out, wfmt = parse(argv)
+
+    if os.environ.get("STUB_IMPORT_LOG"):
+        with open(os.environ["STUB_IMPORT_LOG"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(argv) + "\n")
+
+    if url is None:
+        return 0
+    if url.endswith("/health"):
+        return 0
+    if url.endswith("/security/login"):
+        body = json.dumps({} if SCENARIO == "nologin" else {"access_token": TOKEN})
+        code = "200"
+    elif url.endswith("/dashboard/import/"):
+        if SCENARIO == "import422":
+            body = json.dumps(
+                {
+                    "message": {
+                        "dashboards/verisim_overview.yaml": [
+                            "Dashboard already exists and `overwrite=true` was not passed"
+                        ]
+                    }
+                },
+                indent=2,
+            )
+            code = "422"
+        else:
+            body = json.dumps({"message": "OK"})
+            code = "200"
+    else:
+        body, code = "", "404"
+
+    if out:
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(body)
+    if wfmt:
+        print(wfmt.replace("%{http_code}", code))
+    elif body:
+        sys.stdout.write(body)
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))

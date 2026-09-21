@@ -2,12 +2,16 @@ with source as (
     select * from {{ source('raw_online', 'orders') }}
 ),
 
+-- ids stay TEXT, not uuid: the raw layer below is TEXT (the ingest loads every
+-- column as text) and so is every other staging model, so a ::uuid cast here
+-- makes each join to stg_locations / stg_pos_products / stg_pos_transactions fail
+-- with `operator does not exist: uuid = text` (t_7c88f2f9).
 renamed as (
     select
-        order_id::uuid                           as order_id,
+        order_id::text                           as order_id,
         order_number::bigint                     as order_number,
-        location_id::uuid                        as location_id,
-        nullif(member_id, '')::uuid              as member_id,
+        location_id::text                        as location_id,
+        nullif(member_id, '')::text              as member_id,
         placed_dt::timestamptz                   as placed_dt,
         placed_dt::date                          as order_date,
         fulfillment_type,

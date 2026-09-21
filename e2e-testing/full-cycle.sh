@@ -14,12 +14,16 @@
 #   bash full-cycle.sh              # full wipe + cycle
 #   bash full-cycle.sh --no-wipe    # reuse existing _conf (start+pipeline+verify only)
 #   bash full-cycle.sh --verify     # verification phases only (refuses with
-#                                   #  exit 3 while a pipeline run is in flight)
+#                                   #  exit 3 while a pipeline run is in flight,
+#                                   #  and while the raw layer is mid-rebuild)
 #
 # Exit 0 = every phase passed with no manual intervention. Exit 1 = failed
 # (see LOG_FILE for the failing phase). Exit 2 = bad usage. Exit 3 = REFUSED:
-# the platform was not at rest (pipeline DAG run in flight), so no data verdict
-# was produced — see `verify_at_rest` below.
+# no data verdict was produced — the platform was not in a state where its data
+# can be judged: a tracked pipeline DAG run was in flight, a Superset re-seed
+# was still writing, the raw layer had been dropped and not yet rebuilt (the
+# last load did not succeed), or the Airflow metadata db was unreadable. See
+# `verify_at_rest` below.
 
 set -uo pipefail
 
@@ -41,6 +45,16 @@ EXIT_CANNOT_VERIFY=3
 # leaves the marts half-built just as surely as the umbrella pipeline does, and
 # grocery_ingest_api is still writing raw_* while it runs.
 TRACKED_DAGS="${TRACKED_DAGS:-grocery_complete_pipeline grocery_dbt grocery_ingest_api}"
+# DAGs that (re)load the raw layer. Used only to answer "did the last load end
+# in success?" when a layer is empty: a bare grocery_dbt run cannot empty the
+# raw layer, and empty marts behind a *successful* load are a real data verdict
+# (the transform did not run), not a rebuild window.
+LOAD_DAGS="${LOAD_DAGS:-grocery_ingest_api grocery_complete_pipeline}"
+# Printed when the guard refuses because a layer is empty and not being rebuilt:
+# point at the repair, not just at the symptom. One fresh full run rebuilds
+# raw → staging → marts from the source (airflow/README.md, "Source Addressing").
+REBUILD_HINT='docker exec airflow-apiserver airflow dags unpause -y grocery_complete_pipeline
+docker exec airflow-apiserver airflow dags trigger grocery_complete_pipeline   # then re-run --verify'
 
 for arg in "$@"; do
   case "$arg" in
@@ -90,24 +104,98 @@ wait_dag_run() {  # wait_dag_run <dag_id> <run_id> <max_minutes>
 # therefore reports "0 populated marts" on a perfectly healthy EDW (dev,
 # 2026-09-21: 0 reported vs 42 actually populated) — the gate has to look at
 # the rows. Bounded probe: `select 1 ... limit 1` is O(1) per relation.
+#
+# Both layers are measured ONCE per run (measure_edw) because the at-rest guard
+# and the data gates have to agree on the same numbers: the guard refuses on
+# exactly the states the gates would FAIL on (same thresholds), and two separate
+# probes could straddle the start of a rebuild and describe two different
+# platforms — the confusion this guard exists to prevent.
+RAW_ROWS_MIN=100000   # at or below this the raw layer counts as "empty-ish"
+MART_RELS_MIN=42      # fewer populated mart relations than this = marts not built
+RAW_ROWS=0
+MART_TOTAL=0
+MART_POP=0
+MART_EMPTY=""              # names of the mart relations that hold no rows; "" = none
+MART_PROBE_ANSWERED=false  # false = the mart probe returned NOTHING (not "0 marts")
+EDW_MEASURED=false
+
+raw_rows() {
+  # Rows written into raw_*, from the live-tuple estimate. raw_* is loaded by
+  # COPY/INSERT, which IS counted by n_live_tup, so the estimate is usable there
+  # (9,429,746 estimate vs 9,431,972 exact on dev, 0.02% off a 100k threshold).
+  # Prints "" (treated as 0) when the EDW is unreadable.
+  docker exec postgres psql -U postgres -d grocery -tAc \
+    "select coalesce(sum(n_live_tup),0) from pg_stat_user_tables where schemaname like 'raw_%'" 2>/dev/null |
+    tr -d ' \r\n'
+}
 
 marts_populated() {
-  # "<mart relations>|<populated>|<names of the empty ones>"
+  # "<mart relations>|<populated>|<names of the empty ones>"; "" when postgres
+  # does not answer (the caller must not read that as "0 marts" — see
+  # measure_edw / mart_gate).
+  #
+  # The probe asks whether query_to_xml's document is EMPTY, never what xpath()
+  # makes of it. A populated relation answers `<row xmlns:xsi="…"><n>1</n></row>`,
+  # an EMPTY relation answers the empty string — and xpath() against that empty
+  # string RAISES ("could not parse XML document / DETAIL: Document is empty"),
+  # which the `2>/dev/null` below then hides. One empty `mart.*` relation
+  # therefore aborted the whole measurement: the gate lost the count AND the
+  # list of empty relations, printed "0 of 0 populated marts (empty: unknown)",
+  # and read a stray empty relation as "the mart schema does not exist" — the
+  # same misdiagnosis the row probe (19a6990) was introduced to end. Measured on
+  # dev (pve2 106, PostgreSQL 18.6), 2026-09-21:
+  #   42|42|(none)                    healthy instance
+  #   43|42|zz_probe_empty_tmp        with one transiently empty relation
+  # (Same form as infra's scripts/app-layer.sh mart_probe — keep them in step.)
   docker exec postgres psql -U postgres -d grocery -tAc "
 with mart_rels as (
   select c.relname,
-         (xpath('/row/n/text()',
-                query_to_xml(format('select 1 as n from mart.%I limit 1', c.relname),
-                             false, true, '')))[1]::text as probe
+         coalesce(query_to_xml(format('select 1 as n from mart.%I limit 1', c.relname),
+                               false, true, '')::text, '') as doc
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'mart'
      and c.relkind = 'r'
 )
 select count(*)::text
-       || '|' || (count(*) filter (where probe = '1'))::text
-       || '|' || coalesce(string_agg(relname, ' ' order by relname) filter (where probe is null), '(none)')
-  from mart_rels;" 2>/dev/null | tr -d '\r'
+       || '|' || (count(*) filter (where doc <> ''))::text
+       || '|' || coalesce(string_agg(relname, ' ' order by relname) filter (where doc = ''), '(none)')
+  from mart_rels;" 2>/dev/null | tr -d '\r' | head -1 || true
+}
+
+measure_edw() {
+  # Fills RAW_ROWS / MART_TOTAL / MART_POP / MART_EMPTY / MART_PROBE_ANSWERED
+  # once per run.
+  [ "$EDW_MEASURED" = true ] && return 0
+  local marts
+  RAW_ROWS=$(raw_rows)
+  RAW_ROWS="${RAW_ROWS:-0}"
+  marts=$(marts_populated)
+  # An empty answer is not a count: it is the probe failing to read the schema
+  # (postgres down, mart schema unreadable). Keep the two apart so the gate can
+  # say which state it saw instead of reporting a measurement it never took.
+  MART_PROBE_ANSWERED=true; [ -n "$marts" ] || MART_PROBE_ANSWERED=false
+  IFS='|' read -r MART_TOTAL MART_POP MART_EMPTY <<<"$marts"
+  case "${MART_TOTAL:-}" in ''|*[!0-9]*) MART_TOTAL=0 ;; esac
+  case "${MART_POP:-}"   in ''|*[!0-9]*) MART_POP=0 ;; esac
+  [ "${MART_EMPTY:-}" = "(none)" ] && MART_EMPTY=""   # "" = no empty relation
+  EDW_MEASURED=true
+}
+
+mart_gate() {
+  # 8b's mart half: did the mart layer actually get rows? The four states are
+  # reported apart on purpose — "some relation is empty" and "nothing was
+  # measured" must not read the same, and a partially built mart set is the
+  # interesting one, so its empty relations are NAMED rather than counted.
+  if [ "$MART_PROBE_ANSWERED" != true ]; then
+    fail "the mart probe returned nothing: the mart relations could not be read (postgres or the schema is unreadable) — no count was taken, so this does not say the marts are empty"
+  elif [ "$MART_TOTAL" -eq 0 ]; then
+    fail "no mart relations exist at all (the mart schema holds no tables) — that is a missing mart layer, not a partially built one"
+  elif [ "$MART_POP" -ge "$MART_RELS_MIN" ]; then
+    pass "$MART_RELS_MIN marts populated ($MART_POP/$MART_TOTAL mart relations hold rows${MART_EMPTY:+; empty: $MART_EMPTY})"
+  else
+    fail "only $MART_POP of $MART_TOTAL populated marts (empty: ${MART_EMPTY:-(none)})"
+  fi
 }
 
 # --- at-rest guard ---------------------------------------------------------
@@ -132,6 +220,25 @@ inflight_dag_runs() {
   echo "$rows" | grep -E "^($(echo "$TRACKED_DAGS" | tr ' ' '|')) " || true
 }
 
+last_load_run() {
+  # Prints "<dag_id> <run_id> <state>" for the most recent ENDED run of a load
+  # DAG (LOAD_DAGS: the ingest and the umbrella pipeline); "" when none has ended
+  # yet. rc 0 = read ok; rc 2 = state store UNREADABLE (same contract as
+  # inflight_dag_runs — unknown is not "the last load succeeded").
+  #
+  # "Ended" = success|failed. A run that is still running/queued is the in-flight
+  # guard's business and is refused before this is consulted, so filtering on
+  # terminal states keeps this a question about a load that has finished — the
+  # one that emptied or failed to refill the raw layer.
+  local dags rows
+  dags=$(printf "'%s'," $LOAD_DAGS | sed 's/,$//')  # word-split on purpose
+  rows=$(docker exec postgres psql -U postgres -d airflow -tAc \
+      "select dag_id || ' ' || run_id || ' ' || state from dag_run
+        where state in ('success','failed') and dag_id in ($dags)
+        order by id desc limit 1" 2>/dev/null) || return 2
+  printf '%s' "$rows" | tr -d '\r' | grep -E "^($(echo "$LOAD_DAGS" | tr ' ' '|')) " || true
+}
+
 superset_seed_in_flight() {
   # A re-seed rewrites slices (datasource_id/query_context), so mid-seed the
   # chart gates are exactly as meaningless as mid-pipeline mart counts.
@@ -141,16 +248,22 @@ superset_seed_in_flight() {
   esac
 }
 
-refuse_verify() {  # refuse_verify <headline> [detail]
+refuse_verify() {  # refuse_verify <headline> <detail> [hint commands]
+  # Records the refusal for phase_verify, which owns the exit code: a refusal
+  # only stands in for a verdict that was never produced, so it must not turn a
+  # phase that already failed into exit 3.
+  VERIFY_REFUSAL="$1"
   echo
   echo "REFUSED: $1"
   [ -n "${2:-}" ] && echo "  $2"
-  echo "  No data verdict was produced — marts and charts are only assessable once"
-  echo "  the platform is at rest. Inspect / wait with:"
-  echo "      docker exec postgres psql -U postgres -d airflow -tAc \\"
-  echo "        \"select dag_id, run_id, state from dag_run where state not in ('success','failed')\""
-  echo
-  echo "OVERALL: CANNOT VERIFY — $1 (exit $EXIT_CANNOT_VERIFY)"
+  echo "  No data verdict was produced — marts and charts are only assessable on a"
+  echo "  platform that is at rest and has been loaded. Inspect / wait with:"
+  if [ -n "${3:-}" ]; then
+    printf '%s\n' "$3" | sed 's/^/      /'
+  else
+    echo "      docker exec postgres psql -U postgres -d airflow -tAc \\"
+    echo "        \"select dag_id, run_id, state from dag_run where state not in ('success','failed')\""
+  fi
 }
 
 verify_at_rest() {
@@ -173,6 +286,42 @@ verify_at_rest() {
       "container superset-setup has not finished (dashboard slices still being rewritten)"
     return "$EXIT_CANNOT_VERIFY"
   fi
+
+  # Recovery window. The raw layer is derived data: the documented repair for an
+  # excess is `drop schema raw_* cascade` followed by a full pipeline run
+  # (airflow/README.md, "Source Addressing"). Between the drop and the rebuild
+  # there is NO run in flight, so the checks above pass and the gate then reports
+  # the platform's own recovery back as data findings. Observed on dev
+  # 2026-09-21: grocery_ingest_api run t7c88f2f9-verify2 ended `failed` at
+  # 23:56:00, the raw layer had been dropped, --verify landed at 23:56:32 (32s
+  # later, no run in flight) and printed "raw empty-ish (0)", "only 0 of 0
+  # populated marts" and four unreadable parities; the rebuild (verify3) only
+  # started at 23:57:12. Dropped + not rebuilt = "the platform is recovering";
+  # an empty layer behind a SUCCESSFUL load is a data finding and still FAILs.
+  measure_edw
+  if [ "$RAW_ROWS" -le "$RAW_ROWS_MIN" ] || [ "$MART_POP" -lt "$MART_RELS_MIN" ]; then
+    local last lrc state
+    last=$(last_load_run); lrc=$?
+    if [ "$lrc" -eq 2 ]; then
+      refuse_verify "pipeline status unknown — cannot verify" \
+        "postgres/airflow dag_run is unreadable (metadata db or container down), and the raw layer is empty ($RAW_ROWS rows, $MART_POP/$MART_TOTAL marts hold rows)"
+      return "$EXIT_CANNOT_VERIFY"
+    fi
+    if [ -z "$last" ]; then
+      refuse_verify "no load has succeeded yet — cannot verify" \
+        "raw holds $RAW_ROWS rows and $MART_POP/$MART_TOTAL marts hold rows, and no $(echo "$LOAD_DAGS" | tr ' ' '/') run has ever ended: nothing has loaded this platform yet (or it was just wiped)" \
+        "$REBUILD_HINT"
+      return "$EXIT_CANNOT_VERIFY"
+    fi
+    state="${last##* }"
+    if [ "$state" != "success" ]; then
+      refuse_verify "raw layer mid-rebuild / last load did not succeed — cannot verify" \
+        "raw holds $RAW_ROWS rows and $MART_POP/$MART_TOTAL marts hold rows; the last load ended: $last — i.e. the raw layer was dropped and not rebuilt yet, or the load failed. Re-run the pipeline, then verify." \
+        "$REBUILD_HINT"
+      return "$EXIT_CANNOT_VERIFY"
+    fi
+  fi
+
   echo "  at-rest check: ok (no tracked pipeline DAG run in flight)"
   return 0
 }
@@ -269,8 +418,21 @@ phase_seed_superset() {
 
 phase_verify() {
   echo "=== Phase 8: VERIFY ==="
-  # 8-pre: never emit a data verdict for a platform that is still moving
-  verify_at_rest || exit "$EXIT_CANNOT_VERIFY"
+  # 8-pre: never emit a data verdict for a platform that is still moving, or one
+  # that is inside the raw-layer recovery window (raw dropped, not rebuilt yet).
+  if ! verify_at_rest; then
+    # A refusal stands in for a verdict that was NOT produced. If a phase above
+    # already failed, exit 3 would hide that failure behind "cannot verify" — the
+    # run keeps its FAIL and the verify phase reports no data verdict at all.
+    if [ -n "$FAILED" ]; then
+      echo "  NOTE: a phase above already failed, so this run reports FAIL; no data"
+      echo "        verdict was produced for the verify phase (see REFUSED above)."
+      return
+    fi
+    echo
+    echo "OVERALL: CANNOT VERIFY — ${VERIFY_REFUSAL:-no data verdict possible} (exit $EXIT_CANNOT_VERIFY)"
+    exit "$EXIT_CANNOT_VERIFY"
+  fi
   # 8a: structural checks (DB-level; see verify_seed.sh for the queries)
   bash "$DATALAB/superset/verify_seed.sh" > "$LOG_DIR/verify_seed.out" 2>&1 || fail "verify_seed.sh"
   grep -E "per-dashboard: 9 = [0-9]+" "$LOG_DIR/verify_seed.out" | tail -1
@@ -282,20 +444,14 @@ phase_verify() {
   [ "$n_null_ds" -eq 0 ] && pass "datasource_id all set" || fail "$n_null_ds charts missing datasource_id"
   [ "$n_null_qc" -eq 0 ] && pass "query_context all set" || fail "$n_null_qc charts missing query_context"
 
-  # 8b: data actually flowed through (raw loaded, mart layer populated)
-  # raw_* is loaded by ingest COPY/INSERT, which IS counted by n_live_tup, so the
-  # estimate is usable there (9,429,746 estimate vs 9,431,972 exact on dev,
-  # 0.02% off a 100k threshold). Marts are CTAS-built and need the row probe.
-  local raw marts m_total m_pop m_empty
-  raw=$(docker exec postgres psql -U postgres -d grocery -tAc "select coalesce(sum(n_live_tup),0) from pg_stat_user_tables where schemaname like 'raw_%'")
-  marts=$(marts_populated)
-  IFS='|' read -r m_total m_pop m_empty <<<"$marts"
-  [ "${raw:-0}" -gt 100000 ] && pass "raw populated ($raw rows)" || fail "raw empty-ish ($raw)"
-  if [ "${m_pop:-0}" -ge 42 ]; then
-    pass "42 marts populated ($m_pop/${m_total:-0} mart relations hold rows)"
-  else
-    fail "only ${m_pop:-0} of ${m_total:-0} populated marts (empty: ${m_empty:-unknown})"
-  fi
+  # 8b: data actually flowed through (raw loaded, mart layer populated).
+  # The numbers come from measure_edw, taken before the guard decided the
+  # platform was at rest — raw_* is loaded by ingest COPY/INSERT, which IS
+  # counted by n_live_tup; marts are CTAS-built and need the row probe.
+  # A layer that is empty here has already been cleared by the guard above
+  # (last load succeeded), so these are data findings, not a rebuild window.
+  [ "$RAW_ROWS" -gt "$RAW_ROWS_MIN" ] && pass "raw populated ($RAW_ROWS rows)" || fail "raw empty-ish ($RAW_ROWS)"
+  mart_gate
 
   # 8b-ii: the EDW must not hold MORE rows than the source it was loaded from.
   # A row-count floor is not a data-correctness check: on 2026-09-21 the ingest

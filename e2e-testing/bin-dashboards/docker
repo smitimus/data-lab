@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Stub `docker` for exercising install.sh's Superset dashboard step off-host.
+
+Answers the two call shapes the step makes, from a synthetic bundle so the
+fixtures are the same shape as the real
+`superset/dashboards/verisim_grocery_dashboards.zip` (3 dashboards, 18 charts,
+8 mart datasets, 1 database):
+
+  docker inspect -f '{{.State.Running}}' postgres
+  docker exec postgres psql -U postgres -d <db> -tAc "<sql>"
+
+STUB_SCENARIO:
+  deferred    the mart schema exists but is empty (no transform has run)
+  nomart      the mart schema does not exist at all (cold EDW)
+  missingmart marts exist and 42+ tables there, but one bundled dataset's table
+              is absent — the count alone must not be enough
+  clean       marts complete, every bundled object present, nothing null
+  broken      marts complete, every object present, but the bundle's own 18
+              charts landed with query_context null (what dev shows today)
+  partial     3 bundled charts never landed (a silent partial import)
+  nopg        the postgres container is not running
+"""
+import os
+import re
+import sys
+import zipfile
+
+SCENARIO = os.environ.get("STUB_SCENARIO", "clean")
+ZIP = os.environ["STUB_ZIP"]
+
+z = zipfile.ZipFile(ZIP)
+
+
+def field(name, key):
+    body = z.read(name).decode("utf-8", "replace")
+    m = re.search(r"^" + key + r":\s*(\S+)", body, re.M)
+    return m.group(1) if m else None
+
+
+names = [n for n in z.namelist() if n.endswith(".yaml")]
+
+
+def objects(kind):
+    return [n for n in names if "/" + kind + "/" in n]
+
+
+CHART_UUIDS = [(field(n, "uuid") or "").lower() for n in objects("charts")]
+DASH_UUIDS = [(field(n, "uuid") or "").lower() for n in objects("dashboards")]
+DS_UUIDS = [(field(n, "uuid") or "").lower() for n in objects("datasets")]
+MART_TABLES = sorted({field(n, "table_name") for n in objects("datasets") if field(n, "table_name")})
+CHART_NAMES = [n.rsplit("/", 1)[1][:-5].replace("_", " ") for n in objects("charts")]
+
+# 42 is the gate's bar (dbt materialises 42 mart models); the bundled datasets
+# are part of that 42 on a real host, so fill up to 42 + the bundled ones.
+if SCENARIO in ("clean", "broken", "partial", "import422", "missingmart", "nologin"):
+    ALL_MARTS = MART_TABLES + ["mart_extra_%02d" % i for i in range(1, 43)]
+else:
+    ALL_MARTS = []
+if SCENARIO == "missingmart":
+    ALL_MARTS = [t for t in ALL_MARTS if t != MART_TABLES[0]]
+
+# charts Superset knows about
+if SCENARIO == "partial":
+    LANDED_CHARTS = CHART_UUIDS[: len(CHART_UUIDS) - 3]
+else:
+    LANDED_CHARTS = CHART_UUIDS
+
+META = {
+    "dashboards": len(DASH_UUIDS) + 11,
+    "slices": 34,
+    "null_ds": 0,
+    "null_qc": len(CHART_UUIDS) if SCENARIO == "broken" else 0,
+}
+
+
+def answer(sql):
+    s = re.sub(r"\s+", " ", sql).strip()
+    if "information_schema.tables where table_schema='mart'" in s:
+        return "\n".join(ALL_MARTS)
+    # most specific first: the count queries are prefixes of nothing but share a prefix
+    if "datasource_id is null" in s:
+        return str(META["null_ds"])
+    if "query_context is null" in s and "string_agg" in s:
+        return ", ".join(CHART_NAMES[:8])
+    if "query_context is null" in s:
+        return str(META["null_qc"])
+    if "select count(*) from dashboards" in s:
+        return str(META["dashboards"])
+    if "select count(*) from slices" in s:
+        return str(META["slices"])
+    if "select uuid from dashboards" in s:
+        return "\n".join(DASH_UUIDS + ["0000aaaa-0000-0000-0000-00000000000%d" % i for i in range(11)])
+    if "select uuid from slices" in s:
+        return "\n".join(LANDED_CHARTS + ["1111bbbb-0000-0000-0000-0000000000%02d" % i for i in range(34)])
+    if "select uuid from tables" in s:
+        return "\n".join(DS_UUIDS)
+    if "dashboard_slices" in s:
+        n = len(DASH_UUIDS) + 11
+        return "  ".join("%d=%d dashboard_%02d" % (i, 6 + i, i) for i in range(1, n + 1))
+    return ""
+
+
+def main(argv):
+    if argv[:1] == ["inspect"]:
+        print("false" if SCENARIO == "nopg" else "true")
+        return 0
+    if argv[:1] == ["exec"]:
+        # exec postgres psql -U postgres -d <db> -tAc <sql>
+        sql = argv[-1]
+        out = answer(sql)
+        if out:
+            print(out)
+        return 0
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))

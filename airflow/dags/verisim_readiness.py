@@ -21,9 +21,9 @@ This module turns that race into a wait. ``grocery_complete_pipeline`` starts wi
 ``wait_for_verisim_readiness`` sensor, which pokes the source until it is demonstrably
 serving data and only then releases ``ingest``.
 
-Readiness definition
---------------------
-Ready == **all** of:
+What "ready" means
+------------------
+Ready == **the source can satisfy the ingest DAG**. Concretely, all of:
 
 1. ``GET /health``                              → ``details[<industry>] == "healthy"``
    (the API process is up)
@@ -33,37 +33,66 @@ Ready == **all** of:
    ``backfill`` are both "not ready")
 3. ``GET /<industry>/stats/backfill-progress``  → ``in_progress`` is false
    (belt-and-braces with (2): the generator also reports targeted gap backfills here)
-4. the critical source endpoints (see ``CRITICAL_PROBES``) → ``total > 0``
-   (proves the API is serving event rows, not just answering 200s from reference
-   data — this is the check that catches "raw table never gets created")
+4. **every** source endpoint ``grocery_ingest_api.TABLE_CONFIGS`` loads (32 tables
+   across 9 schemas) answers 200 — and, for a table the EDW does not hold yet, answers
+   with at least one row.
 
-Readiness is *state*-based, not *volume*-based: it never waits for a stable row count,
-because in steady state the generator writes continuously and a "no growth for N
-seconds" rule would deadlock every scheduled run. The data probes ask for one row
-(``limit=1``), so they stay cheap on every poke.
+Checks 1-3 run first and cost three requests; while they fail, check 4 is skipped for
+that poke, so a bootstrapping generator is not probed 32 times a minute.
+
+Why the probe list is derived instead of listed here (t_17927141, 2026-09-21)
+----------------------------------------------------------------------------
+This module used to carry its own ``CRITICAL_PROBES`` — a hand-maintained pair of
+"critical" endpoints. A hand-maintained subset can only ever be as current as the last
+person who edited it, and it went stale the moment the DAG grew: t_2382c671 (returns)
+and t_24fae529 (the online order channel) added five ingest tasks whose endpoints the
+source image on dev did not serve at all. The gate passed — its two endpoints were
+populated — then five ingest tasks failed with ``404 Client Error`` on attempt 1 and
+again on 2, and the run ended in ``verify_raw_vs_source`` with
+
+    source relation online.orders is unreadable: relation "online.orders" does not exist
+
+which is an accurate message, delivered an hour late, about exactly the condition this
+gate exists to catch. The probe list is now built from ``grocery_ingest_api``'s own
+table registry (``TABLE_CONFIGS`` + ``SOURCE_RELATIONS``), so the gate and the load
+cannot drift: a table added to the DAG joins the gate in the same commit, and the
+failure reads "waiting for source relation online.orders" at the sensor instead.
 
 Failure-mode rules (deliberate, see ``evaluate_readiness``)
 -----------------------------------------------------------
-* Empty source rows or an unreachable data endpoint → **not ready** (the ingest would
-  fail on it).
-* A **4xx** from a data probe → **not a block**. A 4xx means *this module asked
-  wrongly* (e.g. a required query param the endpoint demands), which is a defect here,
-  not evidence about the source. It is logged loudly and the generator-state checks
-  (1–3) still gate. Without this rule a probe bug would silently deadlock the pipeline
-  forever — the same class of bug this module exists to fix.
-  (``/pos/transactions`` requires ``start_dt``/``end_dt``; a bare ``limit`` earns a
+* An endpoint the source does not serve (**HTTP 404**) → **not ready**, named by its
+  source relation. The load cannot succeed, so neither may the gate.
+* Empty rows, an unreachable endpoint, a 5xx, or a 200 carrying no row count →
+  **not ready when the corresponding raw table does not exist yet** (the ingest would
+  create nothing and dbt staging would fail on a missing relation — the original
+  first-run failure), and a **warning** when it does (that table is already loaded; a
+  0-row page is then a fact about the source that waiting cannot change, and blocking
+  on it would stall the pipeline forever). The raw-table inventory is read once per
+  poke from the EDW; if that read fails the gate does **not** block on emptiness,
+  because the gate's own inability to probe must never be what halts the pipeline.
+* A **4xx other than 404** (e.g. a required query param this module forgot) → **not a
+  block**. It means *this module asked wrongly*, which is a defect here, not evidence
+  about the source. It is logged loudly and reported in the verdict reason, and the
+  generator-state checks still gate. Without this rule a probe bug would silently
+  deadlock the pipeline forever — the same class of bug this module exists to fix.
+  (``/pos/transactions`` requires ``start_dt``/``end_dt``; a bare ``limit`` earns an
   HTTP 422 on the live API — verified 2026-09-21.)
+
+Readiness stays *state*-based, not *volume*-based: it never waits for a stable row
+count, because in steady state the generator writes continuously and a "no growth for
+N seconds" rule would deadlock every scheduled run. The data probes ask for one row
+(``limit=1``), so the whole check stays cheap on every poke.
 
 Operational notes
 -----------------
-* Steady state costs one poke (~200 ms): mode is already ``realtime`` and both critical
-  endpoints are populated.
+* Steady state costs one poke: the three state requests plus 32 ``limit=1`` probes
+  (a few seconds on the shared Docker network).
 * ``mode="reschedule"`` keeps the worker slot free while waiting; the sensor is only
   ever queued, so it cannot starve the other DAGs.
 * ``READINESS_TIMEOUT_MIN`` bounds the wait. If the source never becomes ready the run
-  fails *loudly, in the sensor*, with the last probe reason in the task log — rather
-  than failing later inside dbt with an opaque "relation does not exist". The next
-  scheduled interval retries by itself.
+  fails *loudly, in the sensor*, with the last probe reason in the task log — listing
+  the source relation(s) it was waiting for — rather than failing later inside dbt with
+  an opaque "relation does not exist". The next scheduled interval retries by itself.
 * All values are env-overridable so a fresh host can be tuned without a code change:
   ``VERISIM_READINESS_TIMEOUT_MIN``, ``VERISIM_READINESS_POKE_S``,
   ``VERISIM_PROBE_TIMEOUT_S``, ``VERISIM_READINESS_LOOKBACK_DAYS``,
@@ -116,23 +145,131 @@ READINESS_TIMEOUT_MIN = int(os.getenv("VERISIM_READINESS_TIMEOUT_MIN", "120"))
 READY_MODES = ("realtime",)
 
 # Rolling window for date-bounded probes. Matches the ingest DAG's incremental
-# fallback (grocery_ingest_api.INCREMENTAL_FALLBACK_DAYS = 365) so the probe looks at
+# fallback (grocery_ingest_api.INCREMENTAL_FALLBACK_DAYS = 365) so the probe asks for
 # the same span the first ingest pass will read.
 LOOKBACK_DAYS = int(os.getenv("VERISIM_READINESS_LOOKBACK_DAYS", "365"))
 
-# The late-arriving event tables whose emptiness broke the first run. Consumers are
-# incremental and have no reference-data seed, so they are empty until the backfill
-# produces transactions — and their raw tables are created lazily from the first
-# non-empty page, which is exactly how the first run breaks.
-#
-# (path, accepts_bare_limit): most endpoints answer `?limit=1`; the POS transactions
-# endpoint validates the date window and 422s without it, so the probe sends the
-# rolling window instead. Keep this in sync with TABLE_CONFIGS in
-# grocery_ingest_api.py if a third table ever joins the "empty on fresh install" set.
-CRITICAL_PROBES = (
-    ("/pos/transactions", False),
-    ("/pos/loyalty-point-transactions", True),
-)
+# The DAG whose table registry defines readiness. It lives beside this module in
+# `dags/`; the registry is imported lazily (see _ingest_registry).
+INGEST_MODULE = "grocery_ingest_api"
+
+# How many offenders a verdict reason names before it summarises the rest. A fresh
+# host can be missing every table at once; the reason must stay readable in a task log.
+REASON_LIST_LIMIT = 5
+
+
+# ---------------------------------------------------------------------------
+# What must be ready — derived from the ingest DAG, never listed here
+# ---------------------------------------------------------------------------
+
+# `dags/` of the Airflow deployment this module ships in. Made explicit because this
+# file is imported from three different places (Airflow's DAG parse, the CLI entry
+# point, the unit tests) and only the first of them is guaranteed to have `dags/` on
+# sys.path.
+_DAGS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_registry: tuple[list, dict] | None = None
+
+
+def _ingest_registry() -> tuple[list, dict]:
+    """``(TABLE_CONFIGS, SOURCE_RELATIONS)`` from the ingest DAG. Imported once.
+
+    Lazy on purpose: this module is imported at DAG-parse time by
+    ``grocery_complete_pipeline``, and a hard import failure here would remove every
+    pipeline DAG from the Airflow UI. Instead a failure is recorded in the evidence
+    and turned into a *verdict* ("cannot verify the source against the ingest
+    registry"), which the sensor reports and the timeout bounds — the same shape as
+    every other failure this gate has.
+    """
+    global _registry
+    if _registry is None:
+        if _DAGS_DIR not in sys.path:
+            sys.path.insert(0, _DAGS_DIR)
+        import importlib
+
+        module = importlib.import_module(INGEST_MODULE)
+        configs = list(module.TABLE_CONFIGS)
+        relations = dict(module.SOURCE_RELATIONS)
+        unmapped = sorted(c[0] for c in configs if c[0] not in relations)
+        if unmapped:
+            raise ValueError(
+                f"{INGEST_MODULE}.SOURCE_RELATIONS has no source relation for: "
+                + ", ".join(unmapped)
+            )
+        _registry = (configs, relations)
+    return _registry
+
+
+def _param_value(moment: datetime, param_name: str | None) -> str:
+    """Format a window boundary the way the ingest does (``ingest_table._fmt``).
+
+    Endpoints whose parameter is named ``*_date`` want ``YYYY-MM-DD``; the rest take a
+    full ISO timestamp. Mirroring the load's own formatting means the probe asks for
+    exactly the request the ingest is about to make.
+    """
+    iso = moment.isoformat()
+    return iso[:10] if param_name and param_name.endswith("_date") else iso
+
+
+def required_probes(now: datetime | None = None) -> list[tuple[str, dict, str, str, str]]:
+    """Every source relation this DAG's ingest depends on, as probe descriptors.
+
+    One entry per ``grocery_ingest_api.TABLE_CONFIGS`` row:
+    ``(api_path, query_params, source_relation, raw_relation, task_id)``.
+
+    ``query_params`` mirrors what ``ingest_table`` sends for that row: ``limit=1``, plus
+    the rolling date window for the endpoints that declare one (the incremental ones —
+    a bare ``limit`` earns a HTTP 422 from those).
+    """
+    configs, relations = _ingest_registry()
+    end = now or datetime.now(timezone.utc)
+    start = end - timedelta(days=LOOKBACK_DAYS)
+
+    probes: list[tuple[str, dict, str, str, str]] = []
+    for (task_id, api_path, raw_schema, raw_table, _pk_col, _strategy, _watermark,
+         api_start_param, api_end_param) in configs:
+        params: dict[str, Any] = {"limit": 1}
+        if api_start_param:
+            params[api_start_param] = _param_value(start, api_start_param)
+            params[api_end_param] = _param_value(end, api_end_param)
+        probes.append((
+            api_path,
+            params,
+            relations[task_id],
+            f"{raw_schema}.{raw_table}",
+            task_id,
+        ))
+    return probes
+
+
+def _raw_table_inventory() -> tuple[set[str] | None, str | None]:
+    """``{'raw_pos.transactions', ...}`` — the raw tables the EDW already holds.
+
+    ``(None, reason)`` when the EDW cannot be read. Callers must then treat every table
+    as present: a gate that blocks because *it* cannot look something up would be the
+    deadlock this module has a rule against (see the module docstring).
+    """
+    try:
+        import psycopg2  # imported here so the module loads without a DB driver
+
+        from grocery_ingest_api import EDW_CONN
+    except Exception as exc:  # noqa: BLE001 — any import failure means "unknown"
+        return None, f"{type(exc).__name__}: {exc}"
+
+    try:
+        conn = psycopg2.connect(**EDW_CONN)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_schema || '.' || table_name "
+                    "FROM information_schema.tables "
+                    "WHERE table_schema LIKE 'raw\\_%'"
+                )
+                return {row[0] for row in cur.fetchall()}, None
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — EDW unreachable is not source unreadiness
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +277,13 @@ CRITICAL_PROBES = (
 # ---------------------------------------------------------------------------
 
 def _get(path: str, params: Mapping[str, Any] | None = None,
-         timeout: float | None = None) -> tuple[int | None, dict | None, str | None]:
+         timeout: float | None = None) -> tuple[int | None, Any, str | None]:
     """GET ``path`` → ``(status_code, json_body, error)``.
 
     ``status_code`` is None for a transport-level failure; ``json_body`` is None when
-    the response was not a JSON object.
+    the response was not JSON. The body may be a dict *or* a bare list: the source
+    serves some endpoints as ``{"data": [...], "total": n}`` and others as ``[...]``
+    (``/hr/locations``, ``/pos/coupons``), and the ingest handles both.
     """
     url = f"{API_BASE}{path}"
     try:
@@ -156,7 +295,7 @@ def _get(path: str, params: Mapping[str, Any] | None = None,
         payload = resp.json()
     except ValueError:
         payload = None
-    if not isinstance(payload, dict):
+    if not isinstance(payload, (dict, list)):
         payload = None
     return resp.status_code, payload, None
 
@@ -165,79 +304,118 @@ def _json(path: str, params: Mapping[str, Any] | None = None,
           timeout: float | None = None) -> dict | None:
     """``_get`` for probes where any failure simply means "cannot prove readiness"."""
     status, payload, error = _get(path, params, timeout)
-    if status != 200 or payload is None:
+    if status != 200 or not isinstance(payload, dict):
         log.warning("[readiness] %s%s failed (status=%s%s)",
                     API_BASE, path, status, f", {error}" if error else "")
         return None
     return payload
 
 
-def critical_params(path: str, accepts_bare_limit: bool,
-                    now: datetime | None = None) -> dict:
-    """Query params for a critical-endpoint probe."""
-    params: dict[str, Any] = {"limit": 1}
-    if not accepts_bare_limit:
-        end = now or datetime.now(timezone.utc)
-        params["start_dt"] = (end - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
-        params["end_dt"] = end.date().isoformat()
-    return params
+def _total_of(payload: Any) -> int | None:
+    """Row count advertised by an endpoint, or None when it advertises none.
+
+    ``{"total": n}`` for the paginated endpoints, the list length for the endpoints
+    that answer with a bare array (the ingest reads them the same way, via
+    ``grocery_ingest_api._fetch_pages``), and ``len(data)`` for a payload that carries
+    ``data`` without a ``total``.
+    """
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        total = payload.get("total")
+        if isinstance(total, int):
+            return total
+        data = payload.get("data")
+        if isinstance(data, list):
+            return len(data)
+    return None
 
 
-def collect_evidence(industry: str = INDUSTRY, timeout: float | None = None) -> dict:
+def collect_evidence(industry: str = INDUSTRY, timeout: float | None = None,
+                     now: datetime | None = None) -> dict:
     """Gather one readiness snapshot. Pure I/O; the verdict is in evaluate_readiness."""
-    critical: dict[str, dict] = {}
-    for suffix, accepts_bare_limit in CRITICAL_PROBES:
-        path = f"/{industry}{suffix}"
-        params = critical_params(path, accepts_bare_limit)
-        status, payload, error = _get(path, params, timeout)
-        total = payload.get("total") if payload else None
-        critical[path] = {
-            "params": params,
-            "status": status,
-            "total": total if isinstance(total, int) else None,
-        }
-        if status != 200:
-            log.warning("[readiness] %s%s -> status=%s%s", API_BASE, path, status,
-                        f" ({error})" if error else "")
-
-    return {
+    evidence: dict[str, Any] = {
         "health": _json("/health", timeout=timeout),
         "status": _json(f"/{industry}/status", timeout=timeout),
         "backfill": _json(f"/{industry}/stats/backfill-progress", timeout=timeout),
-        "critical": critical,
+        "probes": {},
+        "probe_error": None,
+        "probes_skipped": None,
+        "raw_tables": None,
+        "raw_tables_error": None,
     }
+
+    try:
+        probes = required_probes(now=now)
+    except Exception as exc:  # noqa: BLE001 — verdict, not traceback (see _ingest_registry)
+        evidence["probe_error"] = f"{type(exc).__name__}: {exc}"
+        log.error("[readiness] cannot derive the required source relations from %s: %s",
+                  INGEST_MODULE, exc)
+        return evidence
+
+    # Cheap state checks first: while the generator is still bootstrapping there is
+    # nothing to learn from 32 data probes, and poking them every minute would add load
+    # to a source that is busy building its history.
+    state_reason = _state_reason(evidence, industry)
+    if state_reason is not None:
+        evidence["probes_skipped"] = state_reason
+        log.info("[readiness] generator state not ready (%s) — skipping this poke's %d "
+                 "source-relation probe(s)", state_reason, len(probes))
+        return evidence
+
+    for api_path, params, relation, raw_relation, task_id in probes:
+        status, payload, error = _get(api_path, params, timeout)
+        total = _total_of(payload) if status == 200 else None
+        evidence["probes"][api_path] = {
+            "task_id": task_id,
+            "params": params,
+            "status": status,
+            "total": total,
+            "relation": relation,
+            "raw_table": raw_relation,
+        }
+        if status != 200:
+            log.warning("[readiness] %s%s (%s) -> status=%s%s", API_BASE, api_path,
+                        relation, status, f" ({error})" if error else "")
+
+    evidence["raw_tables"], evidence["raw_tables_error"] = _raw_table_inventory()
+    if evidence["raw_tables_error"]:
+        log.warning("[readiness] cannot read the EDW raw-table inventory (%s) — an empty "
+                    "source endpoint will be reported, not treated as unreadiness",
+                    evidence["raw_tables_error"])
+
+    return evidence
 
 
 # ---------------------------------------------------------------------------
 # Verdict (pure — no I/O, unit-testable)
 # ---------------------------------------------------------------------------
 
-def evaluate_readiness(evidence: Mapping[str, Any],
-                       industry: str = INDUSTRY) -> tuple[bool, str]:
-    """Decide readiness from an evidence dict, returning ``(ready, reason)``.
+def _state_reason(evidence: Mapping[str, Any], industry: str = INDUSTRY) -> str | None:
+    """Reason the *generator state* is not ready, or None when it is.
 
-    ``reason`` always explains the verdict and carries the evidence behind it, so the
-    sensor's task log is self-diagnosing (which check failed, and with what).
+    Split out because it is both the first half of the verdict and the gate on whether
+    the 32 data probes are worth spending in this poke.
     """
     health = evidence.get("health")
     if health is None:
-        return False, "verisim API /health unreachable or non-200"
+        return "verisim API /health unreachable or non-200"
     if health.get("status") != "healthy":
-        return False, f"verisim API /health status={health.get('status')!r}"
+        return f"verisim API /health status={health.get('status')!r}"
     details = health.get("details") or {}
     if details.get(industry) != "healthy":
-        return False, f"verisim API reports {industry}={details.get(industry)!r}"
+        return f"verisim API reports {industry}={details.get(industry)!r}"
 
     status = evidence.get("status")
     if status is None:
-        return False, f"/{industry}/status unreachable or non-200"
+        return f"/{industry}/status unreachable or non-200"
     state = status.get("state") or {}
     if not state:
-        return False, f"/{industry}/status returned no generator state"
+        return f"/{industry}/status returned no generator state"
 
     mode = state.get("mode")
     if not state.get("is_running"):
-        return False, (
+        return (
             f"generator not running (mode={mode!r}, is_running={state.get('is_running')!r})"
         )
     if mode not in READY_MODES:
@@ -248,37 +426,99 @@ def evaluate_readiness(evidence: Mapping[str, Any],
                 f" pct_complete={progress['pct_complete']}%"
                 f" days_remaining={progress.get('days_remaining')}"
             )
-        return False, f"generator mode={mode!r} — verisim still bootstrapping{extra}"
+        return f"generator mode={mode!r} — verisim still bootstrapping{extra}"
 
     backfill = evidence.get("backfill")
     if backfill is None:
-        return False, f"/{industry}/stats/backfill-progress unreachable or non-200"
+        return f"/{industry}/stats/backfill-progress unreachable or non-200"
     if backfill.get("in_progress"):
-        return False, (
+        return (
             "backfill in progress "
             f"(pct_complete={backfill.get('pct_complete')}%, "
             f"days_remaining={backfill.get('days_remaining')})"
         )
+    return None
 
-    empty: list[str] = []
+
+def _capped(items: list[str]) -> str:
+    shown = items[:REASON_LIST_LIMIT]
+    extra = f" (+{len(items) - REASON_LIST_LIMIT} more)" if len(items) > REASON_LIST_LIMIT else ""
+    return ", ".join(shown) + extra
+
+
+def evaluate_readiness(evidence: Mapping[str, Any],
+                       industry: str = INDUSTRY) -> tuple[bool, str]:
+    """Decide readiness from an evidence dict, returning ``(ready, reason)``.
+
+    ``reason`` always explains the verdict and carries the evidence behind it, so the
+    sensor's task log is self-diagnosing (which check failed, and with what — named by
+    source relation, so the next reader does not have to translate an API path into a
+    table).
+    """
+    state_reason = _state_reason(evidence, industry)
+    if state_reason is not None:
+        return False, state_reason
+
+    probe_error = evidence.get("probe_error")
+    if probe_error:
+        return False, (
+            "cannot verify the source against the ingest registry "
+            f"({INGEST_MODULE}): {probe_error}"
+        )
+
+    probes = evidence.get("probes") or {}
+    if not probes:
+        # A ready generator with no probes means the registry could not be read or is
+        # empty. Refuse to claim readiness rather than pass on no evidence; the sensor
+        # timeout bounds it and reports this line.
+        return False, (
+            "no source-relation probes were collected for a ready generator — refusing "
+            f"to declare readiness without checking {INGEST_MODULE}.TABLE_CONFIGS"
+        )
+
+    raw_tables = evidence.get("raw_tables")
+
+    missing: list[str] = []
     unreachable: list[str] = []
+    empty_new: list[str] = []
+    empty_loaded: list[str] = []
     rejected: list[str] = []
     populated: list[str] = []
-    for path, probe in sorted((evidence.get("critical") or {}).items()):
+
+    for api_path, probe in sorted(probes.items()):
+        relation = probe.get("relation") or api_path
+        raw_table = probe.get("raw_table")
         probe_status = probe.get("status")
         total = probe.get("total")
-        if probe_status is not None and 400 <= probe_status < 500:
-            rejected.append(f"{path} (HTTP {probe_status})")
-        elif total is None:
-            unreachable.append(f"{path} (status={probe_status!r})")
-        elif total <= 0:
-            empty.append(f"{path} (total={total})")
-        else:
-            populated.append(f"{path.rsplit('/', 1)[-1]}={total}")
 
-    # A 4xx is this module's own request being wrong, not the source being unready.
-    # Never block on it — the generator-state checks above already gate — but say so
-    # in both the task log and the verdict reason.
+        if probe_status == 404:
+            # The source does not serve this endpoint at all. The load will fail here
+            # (HTTPError on the same request), so the gate must not pass. This is the
+            # t_17927141 case: named by relation, so the task log says which table.
+            missing.append(f"source relation {relation} not served ({api_path} → HTTP 404)")
+        elif probe_status is not None and 400 <= probe_status < 500:
+            rejected.append(f"{api_path} (HTTP {probe_status})")
+        elif probe_status != 200:
+            unreachable.append(f"{relation} ({api_path} → {probe_status!r})")
+        elif total is None:
+            unreachable.append(f"{relation} ({api_path} → 200 with no row count)")
+        elif total <= 0:
+            # Empty + no raw table yet = the ingest creates nothing and dbt staging
+            # fails on a missing relation (the original first-run failure). Empty +
+            # table already loaded = a fact about the source; waiting cannot change it
+            # and blocking on it would stall the pipeline, so it is reported instead.
+            # (raw_tables is None when the EDW could not be read → do not block.)
+            if raw_tables is not None and raw_table not in raw_tables:
+                empty_new.append(f"source relation {relation} serving no rows yet "
+                                 f"({api_path} → total=0, {raw_table} not loaded yet)")
+            else:
+                empty_loaded.append(f"{relation} ({api_path} → total=0)")
+        else:
+            populated.append(f"{relation}={total}")
+
+    # A 4xx that is not a 404 is *this module* asking wrongly, not the source being
+    # unready. Never block on it — the generator-state checks above already gate — but
+    # say so in both the task log and the verdict reason.
     rejected_note = ""
     if rejected:
         detail = ", ".join(rejected)
@@ -287,16 +527,37 @@ def evaluate_readiness(evidence: Mapping[str, Any],
         log.warning("[readiness] probe(s) rejected by the API, not treated as "
                     "unreadiness (probe params need fixing): %s", detail)
 
-    if empty:
-        return False, "source endpoint(s) serving no rows yet: " + ", ".join(empty)
-    if unreachable:
-        return False, "source endpoint(s) unreachable: " + ", ".join(unreachable)
+    empty_note = ""
+    if empty_loaded:
+        detail = ", ".join(empty_loaded)
+        empty_note = f"; already-loaded table(s) serving no rows (not blocking): {detail}"
+        log.warning("[readiness] %d source relation(s) serving no rows but already "
+                    "loaded into the EDW (not blocking): %s", len(empty_loaded), detail)
 
-    if not populated:
-        return True, f"mode=realtime, backfill complete (no data probes configured){rejected_note}"
+    problems: list[str] = []
+    if missing:
+        problems.append(
+            f"waiting for {len(missing)} of {len(probes)} source relation(s) this DAG "
+            f"ingests that the source does not serve: {_capped(missing)}"
+        )
+    if unreachable:
+        problems.append(
+            f"{len(unreachable)} source endpoint(s) unreachable: {_capped(unreachable)}"
+        )
+    if empty_new:
+        problems.append(
+            f"waiting for {len(empty_new)} source relation(s) serving no rows yet (their "
+            f"raw table would never be created, so dbt staging would fail on a missing "
+            f"relation): {_capped(empty_new)}"
+        )
+    if problems:
+        return False, "; ".join(problems) + rejected_note
+
     return True, (
-        "mode=realtime, backfill complete, critical tables populated "
-        f"({', '.join(populated)}){rejected_note}"
+        f"mode=realtime, backfill complete — all {len(populated)} source relations this "
+        f"DAG ingests are served and non-empty "
+        f"({', '.join(rel.split('=')[0] for rel in populated[:3])}, …)"
+        + empty_note + rejected_note
     )
 
 
@@ -305,9 +566,12 @@ def evaluate_readiness(evidence: Mapping[str, Any],
 # ---------------------------------------------------------------------------
 
 def check(industry: str = INDUSTRY, timeout: float | None = None) -> tuple[bool, str]:
-    """One probe + verdict, logged."""
+    """One probe + verdict, logged so the sensor's task log carries the reason."""
     ready, reason = evaluate_readiness(collect_evidence(industry, timeout=timeout), industry)
-    log.info("[readiness] %s — %s", "READY" if ready else "NOT READY", reason)
+    if ready:
+        log.info("[readiness] READY — %s", reason)
+    else:
+        log.warning("[readiness] NOT READY — %s", reason)
     return ready, reason
 
 

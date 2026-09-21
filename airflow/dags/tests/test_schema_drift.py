@@ -61,7 +61,7 @@ def install_api(routes):
 
     def fake_get(url, params=None, timeout=None):
         state["calls"].append((url, dict(params or {})))
-        path = url.replace(gia.API_BASE, "")
+        path = url.replace(gia.VERISIM_API_URL, "")
         seq = routes.get(path)
         key = (path, len([c for c in state["calls"] if c[0].endswith(path)]) - 1)
         handler = seq[key[1]] if key[1] < len(seq) else seq[-1]
@@ -170,9 +170,25 @@ def main():
     finally:
         restore()
     check("3 persistent 5xx raises", raised is not None and "failed after" in raised, raised or "no raise")
+    # A persistent 5xx reaches this route as more than one *logical* request: the
+    # page-size probe asks with limit=PREFERRED_LIMIT, gives up after its own retry
+    # budget and falls back (t_7c88f2f9), then _probe_window asks for a single row
+    # (limit=1) and gives up too — that second give-up is the RuntimeError caught
+    # above. So "the route was called exactly FETCH_RETRIES times" stopped being the
+    # right expectation when the page-size probe landed; what must hold is that every
+    # logical request spends exactly its FETCH_RETRIES attempts before raising (no
+    # early give-up, no unbounded retry). Group the attempts by the params they were
+    # sent with, so this tracks the retry budget rather than how many logical
+    # requests the ingest happens to make.
+    calls5 = [p for url, p in state["calls"] if url.endswith("/fake/fifty")]
+    attempts: dict = {}
+    for p in calls5:
+        key = tuple(sorted(p.items()))
+        attempts[key] = attempts.get(key, 0) + 1
     check("3b retried FETCH_RETRIES times",
-          len([c for c in state["calls"] if c[0].endswith("/fake/fifty")]) == gia.FETCH_RETRIES,
-          str(len([c for c in state["calls"] if c[0].endswith("/fake/fifty")])))
+          bool(attempts) and all(n == gia.FETCH_RETRIES for n in attempts.values()),
+          f"{len(calls5)} calls over {len(attempts)} logical request(s): "
+          f"{sorted(attempts.values())} (FETCH_RETRIES={gia.FETCH_RETRIES})")
 
     # ------------------------------------------------------------------
     # 4. Transient 5xx then recovery -> data loads
@@ -206,8 +222,13 @@ def main():
         raised5 = str(e)
     finally:
         restore()
+    # The message is "Refusing to report a partial load as success (see _fetch_all)"
+    # — t_7c88f2f9 reworded it, so match on the refusal itself rather than on one
+    # old phrasing (the original assertion wanted the literal "refusing partial load",
+    # which no version of the message ever contained).
     check("5 partial vs advertised total raises",
-          raised5 is not None and "refusing partial load" in raised5, raised5 or "no raise")
+          raised5 is not None and "refusing" in raised5.lower()
+          and "partial load" in raised5.lower(), raised5 or "no raise")
 
     psql(f"DROP SCHEMA IF EXISTS \"{SCHEMA}\" CASCADE")
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

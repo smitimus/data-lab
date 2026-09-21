@@ -102,10 +102,28 @@ bash init.sh
 bash start.sh
 ```
 
-### 5. Import Superset dashboards (manual)
+### 5. Superset dashboards (bundled import)
 
-1. Open Superset → Dashboards → ⋮ → Import
-2. Select files from `superset/dashboards/`
+`install.sh` imports the bundled dashboards in the background once Superset is
+healthy — but the bundle carries one Superset dataset per mart table, so the
+import is **deferred while the mart schema is empty** (on a fresh install it
+always is: the first pipeline run is triggered by hand afterwards). Importing
+earlier would land charts whose datasets have no table behind them, which
+Superset answers with a cheerful `200 {"message": "OK"}`.
+
+Once the DAG has populated the marts, re-run just the import:
+
+```bash
+bash /opt/data-lab/install.sh --dashboards-only
+```
+
+It imports with `overwrite=true` (safe to repeat), reports per object — every
+bundled dashboard/chart/dataset present or MISSING, plus the gate's own
+`datasource_id` / `query_context` checks — and exits non-zero if the import left
+Superset incomplete (`DASH_STRICT=0` downgrades that to a warning).
+
+Manual alternative: Superset → Dashboards → ⋮ → Import, then select the file from
+`superset/dashboards/`.
 
 </details>
 
@@ -116,8 +134,10 @@ bash start.sh
 1. **Trigger the Airflow DAG:** Airflow → DAGs → `grocery_pipeline` → ▶ Trigger
    - Run the pipeline: trigger `grocery_ingest_api` → `grocery_dbt` (staging → marts → tests)
 2. **Check Superset dashboards** — data appears after the first successful DAG run
-3. **Adopt stacks in Dockhand:** `bash setup.sh` (or follow prompts)
-4. **dbt Docs catalog** — browse model lineage and columns at `http://SERVER_IP:8082`
+3. **Re-run the bundled dashboard import** — it defers until the marts exist:
+   `bash /opt/data-lab/install.sh --dashboards-only`
+4. **Adopt stacks in Dockhand:** `bash setup.sh` (or follow prompts)
+5. **dbt Docs catalog** — browse model lineage and columns at `http://SERVER_IP:8082`
 
 ---
 
