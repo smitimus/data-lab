@@ -152,6 +152,10 @@ services:
     networks:
       - airflow_network
       - postgres_network
+      # The ingest DAG reaches the Verisim source (API + DB) by service name on
+      # this network. Owned by verisim-grocery/compose.yaml, which start.sh
+      # brings up before airflow (t_05b48b69).
+      - datalab_shared
   airflow-dag-processor:
     <<: *a1
     container_name: airflow-dag-processor
@@ -201,6 +205,9 @@ services:
     networks:
       - airflow_network
       - postgres_network
+      # Worker executes the ingest tasks; the source is addressed as
+      # `verisim-grocery` on this network (t_05b48b69).
+      - datalab_shared
   airflow-triggerer:
     <<: *a1
     container_name: airflow-triggerer
@@ -309,3 +316,7 @@ networks:
   postgres_network:
     external: true
     name: postgres_postgres_network
+  # Source network (Verisim API + DB), owned by verisim-grocery/compose.yaml.
+  datalab_shared:
+    external: true
+    name: datalab_shared

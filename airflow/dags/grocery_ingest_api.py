@@ -7,7 +7,17 @@ This is the sole ingestion path into the EDW (Meltano has been removed from the 
 Strategy per table:
   - Full refresh: TRUNCATE raw table then reload all rows via paginated API calls.
   - Incremental: query MAX(watermark_col) from raw table, fetch records created
-    after that timestamp. Falls back to 30 days ago on an empty table.
+    after that timestamp. Falls back to 365 days ago on an empty table.
+
+The source (Verisim HTTP API + source DB) is addressed by Docker service name on
+the shared network — see the `datalab_shared` network in
+verisim-grocery/compose.yaml. It is deliberately not derived from the host's
+`IP` env var: a stale IP makes the ingest read another instance's dataset
+instead of failing (t_05b48b69).
+
+The DAG ends with `verify_raw_vs_source`, an invariant that compares every raw
+table's row count against its source relation and fails the run when the EDW
+holds more rows than the source. See SOURCE_RELATIONS for the mapping.
 
 For a full historical backfill, pass DAG params:
   {"start_dt": "2026-01-01T00:00:00", "end_dt": "2026-03-22T23:59:59"}
@@ -39,7 +49,32 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 import os
-API_BASE = f"http://{os.getenv('IP', '127.0.0.1')}:8010"
+
+# ---------------------------------------------------------------------------
+# Source address — the Verisim instance that belongs to THIS stack
+# ---------------------------------------------------------------------------
+# Resolved by Docker service name over the shared network (see the
+# `datalab_shared` network in verisim-grocery/compose.yaml). Both the HTTP API
+# and the source DB are addressed this way, and deliberately NOT through the
+# host's `IP` env var.
+#
+# Why: `IP` is a host-specific value baked into the container environment when
+# the container is created. When it goes stale the ingest does not fail — it
+# quietly reads a *different* instance's dataset and writes it into our EDW as
+# if it were ours (t_05b48b69, 2026-09-21: the worker still carried
+# IP=192.168.1.7 from the host being replaced, so a fresh dev instance ingested
+# 1,136,360 transactions from the old instance while its own source held
+# 98,112 — and then spent hours pulling that instance's 6.6M transaction_items).
+# Service DNS cannot drift: it resolves inside the stack or the task fails.
+VERISIM_API_URL = os.getenv("VERISIM_API_URL", "http://verisim-grocery:8000")
+VERISIM_DB = {
+    "host": os.getenv("VERISIM_DB_HOST", "verisim-grocery"),
+    "port": int(os.getenv("VERISIM_DB_PORT", "5432")),
+    "dbname": os.getenv("VERISIM_DB_NAME", "grocery"),
+    "user": os.getenv("VERISIM_DB_USER", "verisim"),
+    "password": os.getenv("VERISIM_DB_PASSWORD", "verisim"),
+}
+
 EDW_CONN = {
     "host": "postgres",
     "port": 5432,
@@ -203,6 +238,71 @@ TABLE_CONFIGS = [
      "full", None, None, None),
 ]
 
+# ---------------------------------------------------------------------------
+# Reconciliation contract: raw table → source relation
+# ---------------------------------------------------------------------------
+# The raw table each task fills and the Verisim relation that task is supposed
+# to be a copy of. This is what makes the post-ingest invariant
+# (verify_raw_vs_source) possible: without an explicit mapping there is no way
+# to tell "loaded fewer rows because the endpoint filters" from "loaded a
+# different instance's data".
+#
+# When adding a table to TABLE_CONFIGS, add it here too — the module asserts
+# the two stay in sync, so a miss fails at DAG parse time rather than silently
+# leaving a table unreconciled.
+#
+# The API path is NOT a reliable derivation of this: the endpoints spell tables
+# with hyphens and the mapping is not 1:1 by name
+# (ordering/order-items → ordering.store_order_items).
+SOURCE_RELATIONS = {
+    # task_id                         source relation
+    "hr_locations":                   "hr.locations",
+    "hr_employees":                   "hr.employees",
+    "hr_schedules":                   "hr.schedules",
+    "pos_departments":                "pos.departments",
+    "pos_products":                   "pos.products",
+    "pos_price_history":              "pos.price_history",
+    "pos_coupons":                    "pos.coupons",
+    "pos_combo_deals":                "pos.combo_deals",
+    "pos_loyalty_members":            "pos.loyalty_members",
+    "pos_loyalty_point_transactions": "pos.loyalty_point_transactions",
+    "pos_transactions":               "pos.transactions",
+    "pos_transaction_items":          "pos.transaction_items",
+    "pos_returns":                    "pos.returns",
+    "pos_return_items":               "pos.return_items",
+    "online_orders":                  "online.orders",
+    "online_order_items":             "online.order_items",
+    "online_order_events":            "online.order_events",
+    "timeclock_events":               "timeclock.events",
+    "ordering_store_orders":          "ordering.store_orders",
+    "ordering_store_order_items":     "ordering.store_order_items",
+    "fulfillment_orders":             "fulfillment.orders",
+    "fulfillment_items":              "fulfillment.items",
+    "transport_trucks":               "transport.trucks",
+    "transport_loads":                "transport.loads",
+    "transport_load_items":           "transport.load_items",
+    "inv_products":                   "inv.products",
+    "inv_stock_levels":               "inv.stock_levels",
+    "inv_receipts":                   "inv.receipts",
+    "inv_receipt_items":              "inv.receipt_items",
+    "inv_shrinkage_events":           "inv.shrinkage_events",
+    "pricing_weekly_ads":             "pricing.weekly_ads",
+    "pricing_ad_items":               "pricing.ad_items",
+}
+
+# Endpoints that intentionally serve a SUBSET of their source relation
+# (`active_only=True` by default in the Verisim API). For these a shortfall is
+# expected and is only reported; an *excess* is always a failure.
+SOURCE_PARTIAL = {"pos_coupons", "pos_combo_deals"}
+
+_unmapped = sorted(c[0] for c in TABLE_CONFIGS if c[0] not in SOURCE_RELATIONS)
+if _unmapped:
+    raise ValueError(
+        "SOURCE_RELATIONS is missing entries for configured table(s): "
+        + ", ".join(_unmapped)
+    )
+
+
 # Schema prefix → TaskGroup label
 _PREFIX_TO_GROUP = {
     "hr_": "hr",
@@ -341,7 +441,7 @@ def _fetch_pages(path: str, params: dict, max_page_fetch: int | None = None):
     pagination ends with fewer rows than that snapshot, RuntimeError is raised —
     silently-dropped rows are a partial load posing as success.
     """
-    url = f"{API_BASE}{path}"
+    url = f"{VERISIM_API_URL}{path}"
     page_limit = max_page_fetch or PAGE_SIZE
     offset = 0
     snapshot_total = None
@@ -571,6 +671,189 @@ def ingest_table(
 
 
 # ---------------------------------------------------------------------------
+# Post-ingest invariant — raw vs source row counts
+# ---------------------------------------------------------------------------
+
+def _source_counts(relations: list) -> tuple:
+    """count(*) per source relation, read from the Verisim source DB.
+
+    Returns (counts, errors): a relation that cannot be counted maps to None in
+    counts and carries its reason in errors. A source image older than this
+    DAG's table registry — or a wrong mapping — must surface as a named contract
+    violation, not as a psycopg2 traceback in the middle of the invariant.
+    """
+    conn = psycopg2.connect(**VERISIM_DB)
+    counts, errors = {}, {}
+    try:
+        for rel in relations:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT COUNT(*) FROM {rel}")
+                    counts[rel] = cur.fetchone()[0]
+            except psycopg2.Error as exc:
+                # The failed statement aborts the transaction; clear it or every
+                # following COUNT dies with InFailedSqlTransaction.
+                conn.rollback()
+                reason = str(exc).strip().splitlines()[0]
+                counts[rel] = None
+                errors[rel] = reason
+                log.warning("[verify] source relation %s is unreadable: %s", rel, reason)
+    finally:
+        conn.close()
+    return counts, errors
+
+
+def _assert_api_is_this_source() -> None:
+    """Cheap identity probe: the API and the source DB must be the same instance.
+
+    Both are resolved by service name, so this only fires if something has
+    re-pointed one of them (an override, a stray env var, a second Verisim).
+    It would not have caught t_05b48b69 on its own — that ingest used one host
+    for both — but it makes a split-horizon source address loud instead of
+    silent. hr.locations is static, so the counts are stable enough to compare.
+    """
+    resp = requests.get(f"{VERISIM_API_URL}/grocery/hr/locations", timeout=30)
+    resp.raise_for_status()
+    payload = resp.json()
+    api_n = len(payload if isinstance(payload, list) else payload.get("data", []))
+    db_n, db_err = _source_counts(["hr.locations"])
+    if db_err:
+        raise RuntimeError(
+            f"source DB at {VERISIM_DB['host']}:{VERISIM_DB['port']} does not expose "
+            f"hr.locations: {db_err['hr.locations']}"
+        )
+    db_n = db_n["hr.locations"]
+    if api_n != db_n:
+        raise RuntimeError(
+            f"source address mismatch: {VERISIM_API_URL}/grocery/hr/locations reports "
+            f"{api_n} locations but the source DB at {VERISIM_DB['host']}:{VERISIM_DB['port']} "
+            f"holds {db_n} — the API and the DB are different instances"
+        )
+    log.info(
+        "[verify] source identity ok — %s and %s:%s agree (hr.locations=%d)",
+        VERISIM_API_URL, VERISIM_DB["host"], VERISIM_DB["port"], api_n,
+    )
+
+
+def _reconcile(rows: list, src: dict) -> tuple:
+    """Pure decision half of the invariant: classify reconciled rows.
+
+    rows: [(task_id, raw_schema, raw_table, relation, raw_count_or_None)]
+    src:  {source relation: source row count}
+
+    Returns (excess, missing) where excess is
+    [(task_id, raw relation, source relation, raw_count, source_count)] for every
+    raw table holding MORE rows than its source, and missing lists source
+    relations that could not be read (a broken mapping, not a data problem).
+    Kept separate from the querying so the rule itself is unit-testable.
+    """
+    excess, missing = [], []
+    for task_id, raw_schema, raw_table, relation, raw_n in rows:
+        if src.get(relation) is None:
+            missing.append(relation)
+            continue
+        if raw_n is None or raw_n <= src[relation]:
+            continue
+        excess.append(
+            (task_id, f"{raw_schema}.{raw_table}", relation, raw_n, src[relation])
+        )
+    return excess, missing
+
+
+def _excess_message(excess: list, rows_checked: int) -> str:
+    detail = "; ".join(
+        f"{raw_rel} has {raw_n} rows but {rel} holds only {src_n} ({raw_n / src_n:.1f}x)"
+        if src_n else
+        f"{raw_rel} has {raw_n} rows but {rel} is empty"
+        for _, raw_rel, rel, raw_n, src_n in excess
+    )
+    return (
+        f"raw tables hold rows that are not in the source ({len(excess)} of "
+        f"{rows_checked} table(s)): {detail} — source API {VERISIM_API_URL}, source DB "
+        f"{VERISIM_DB['host']}:{VERISIM_DB['port']}. The ingest is reading a "
+        f"different instance than this stack owns, or appending instead of upserting."
+    )
+
+
+def verify_raw_vs_source(**context) -> None:
+    """Fail the ingest when a raw table holds MORE rows than its source relation.
+
+    The rule is one-sided on purpose. The source is live: it only ever grows
+    while a run is in flight, so the source count read *after* the load is
+    always >= the count that was available to fetch, and a faithful load can
+    never exceed it. Re-reading a page cannot inflate a raw table either — the
+    upsert is keyed on the primary key. An excess therefore means exactly one
+    of:
+
+      * the ingest read a different Verisim instance than the one this stack
+        owns (t_05b48b69 — 1,136,360 foreign rows against a 98,112-row source),
+      * the raw table was loaded from a source that was reloaded underneath it,
+      * a future change broke the upsert back into a blind append.
+
+    Shortfalls are logged but not failed: several endpoints legitimately serve a
+    subset of their relation (SOURCE_PARTIAL), and a load interrupted by a live
+    source is not an invariant violation. Partial loads are already fatal in
+    _assert_complete, which compares rows written against the API's own total.
+    """
+    _assert_api_is_this_source()
+
+    edw = _edw_conn()
+    rows = []
+    try:
+        with edw.cursor() as cur:
+            for cfg in TABLE_CONFIGS:
+                task_id, raw_schema, raw_table = cfg[0], cfg[2], cfg[3]
+                relation = SOURCE_RELATIONS[task_id]
+                cur.execute("""
+                    SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_schema = %s AND table_name = %s
+                """, [raw_schema, raw_table])
+                raw_n = None
+                if cur.fetchone()[0]:
+                    cur.execute(f'SELECT COUNT(*) FROM "{raw_schema}"."{raw_table}"')
+                    raw_n = cur.fetchone()[0]
+                rows.append((task_id, raw_schema, raw_table, relation, raw_n))
+
+        src, src_errors = _source_counts([r[3] for r in rows])
+    finally:
+        edw.close()
+
+    log.info("[verify] raw vs source row counts (excess is the failure condition)")
+    log.info("[verify]   %-32s %-34s %10s %10s %9s",
+             "task", "source relation", "raw", "source", "delta")
+    for task_id, _, _, relation, raw_n in rows:
+        source_n = src.get(relation)
+        if source_n is None or raw_n is None:
+            log.info("[verify]   %-32s %-34s %10s %10s %9s", task_id, relation,
+                     "ABSENT" if raw_n is None else raw_n,
+                     "?" if source_n is None else source_n, "-")
+            continue
+        note = "  <- subset endpoint" if task_id in SOURCE_PARTIAL else ""
+        log.info("[verify]   %-32s %-34s %10d %10d %+9d%s",
+                 task_id, relation, raw_n, source_n, raw_n - source_n, note)
+
+    excess, missing = _reconcile(rows, src)
+
+    if missing:
+        detail = "; ".join(
+            f"{rel} ({src_errors.get(rel, 'not returned by the source')})"
+            for rel in sorted(set(missing))
+        )
+        raise RuntimeError(
+            f"reconciliation contract broken — {len(set(missing))} of {len(rows)} source "
+            f"relation(s) unreadable at {VERISIM_DB['host']}:{VERISIM_DB['port']}: {detail}. "
+            f"The source's schema is behind this DAG's table registry "
+            f"(SOURCE_RELATIONS), or a mapping is wrong."
+        )
+
+    if excess:
+        raise RuntimeError(_excess_message(excess, len(rows)))
+
+    log.info("[verify] ok — no raw table exceeds its source relation (%d tables checked)",
+             len(rows))
+
+
+# ---------------------------------------------------------------------------
 # DAG — group configs by schema, build one TaskGroup per schema
 # ---------------------------------------------------------------------------
 
@@ -605,11 +888,12 @@ with DAG(
     tags=["grocery", "api", "ingest", "granular"],
 ) as dag:
 
+    ingest_tasks = []
     for schema, table_list in grouped.items():
         with TaskGroup(group_id=f"ingest_{schema}"):
             for (tid, api_path, raw_schema, raw_table, pk_col,
                  strategy, watermark_col, api_start_param, api_end_param) in table_list:
-                PythonOperator(
+                ingest_tasks.append(PythonOperator(
                     task_id=tid,
                     python_callable=ingest_table,
                     op_kwargs={
@@ -624,4 +908,16 @@ with DAG(
                         "api_end_param": api_end_param,
                     },
                     execution_timeout=timedelta(minutes=60),
-                )
+                ))
+
+    # Runs whatever the ingest tasks did (all_done): the invariant exists to
+    # fail loudly, so it must not be skipped because a sibling already failed.
+    # trigger_rule is a string to avoid importing TriggerRule from a path that
+    # moved between Airflow 2 and 3.
+    verify = PythonOperator(
+        task_id="verify_raw_vs_source",
+        python_callable=verify_raw_vs_source,
+        trigger_rule="all_done",
+        execution_timeout=timedelta(minutes=15),
+    )
+    ingest_tasks >> verify

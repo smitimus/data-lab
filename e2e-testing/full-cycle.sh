@@ -13,10 +13,13 @@
 # Usage:
 #   bash full-cycle.sh              # full wipe + cycle
 #   bash full-cycle.sh --no-wipe    # reuse existing _conf (start+pipeline+verify only)
-#   bash full-cycle.sh --verify     # run verification phases only
+#   bash full-cycle.sh --verify     # verification phases only (refuses with
+#                                   #  exit 3 while a pipeline run is in flight)
 #
 # Exit 0 = every phase passed with no manual intervention. Exit 1 = failed
-# (see LOG_FILE for the failing phase).
+# (see LOG_FILE for the failing phase). Exit 2 = bad usage. Exit 3 = REFUSED:
+# the platform was not at rest (pipeline DAG run in flight), so no data verdict
+# was produced — see `verify_at_rest` below.
 
 set -uo pipefail
 
@@ -30,6 +33,14 @@ LOG_FILE="$LOG_DIR/full-cycle-$(date +%Y%m%d-%H%M%S).log"
 RUN_TAG="manual_fullcycle_$(date +%s)"
 WIPE=true
 VERIFY_ONLY=false
+# Exit code for "the platform is not at rest — no data verdict is possible".
+# Distinct from 0 (pass), 1 (fail) and 2 (usage) so a refusal can never be
+# mistaken for a result.
+EXIT_CANNOT_VERIFY=3
+# DAGs whose in-flight runs invalidate a data verdict. A bare grocery_dbt run
+# leaves the marts half-built just as surely as the umbrella pipeline does, and
+# grocery_ingest_api is still writing raw_* while it runs.
+TRACKED_DAGS="${TRACKED_DAGS:-grocery_complete_pipeline grocery_dbt grocery_ingest_api}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -70,6 +81,100 @@ wait_dag_run() {  # wait_dag_run <dag_id> <run_id> <max_minutes>
   done
   echo "  TIMEOUT after ${max}m"
   return 1
+}
+
+# --- measurements ----------------------------------------------------------
+# Marts are built by CREATE TABLE AS, which never feeds the per-table insert
+# counters: pg_stat_user_tables.n_live_tup / n_tup_ins stay 0 and
+# pg_class.reltuples stays -1 until an explicit ANALYZE. A stats-based count
+# therefore reports "0 populated marts" on a perfectly healthy EDW (dev,
+# 2026-09-21: 0 reported vs 42 actually populated) — the gate has to look at
+# the rows. Bounded probe: `select 1 ... limit 1` is O(1) per relation.
+
+marts_populated() {
+  # "<mart relations>|<populated>|<names of the empty ones>"
+  docker exec postgres psql -U postgres -d grocery -tAc "
+with mart_rels as (
+  select c.relname,
+         (xpath('/row/n/text()',
+                query_to_xml(format('select 1 as n from mart.%I limit 1', c.relname),
+                             false, true, '')))[1]::text as probe
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'mart'
+     and c.relkind = 'r'
+)
+select count(*)::text
+       || '|' || (count(*) filter (where probe = '1'))::text
+       || '|' || coalesce(string_agg(relname, ' ' order by relname) filter (where probe is null), '(none)')
+  from mart_rels;" 2>/dev/null | tr -d '\r'
+}
+
+# --- at-rest guard ---------------------------------------------------------
+# A data verdict is only meaningful when nothing is mutating the EDW. Marts
+# legitimately do not exist until `transform` finishes, so a gate that runs
+# mid-pipeline reports the run's own progress back as a data failure — observed
+# 2026-09-20: "FAIL only 0 populated marts" + "18 charts missing query_context"
+# on a healthy instance, which sent the operator hunting a bug that did not
+# exist for ~20 minutes. Refuse (EXIT_CANNOT_VERIFY) instead of inventing one.
+#
+# Source of truth is the Airflow metadata db (postgres/airflow), not the REST
+# API: it stays readable while the API server is busy or down, and it is the
+# same store the scheduler consults to decide what is still running.
+
+inflight_dag_runs() {
+  # Prints "<dag_id> <run_id> <state>" per in-flight tracked run.
+  # rc 0 = read ok (possibly no rows); rc 2 = status UNKNOWN — an unreadable
+  # state store is not the same as "at rest", so it must not yield a verdict.
+  local rows
+  rows=$(docker exec postgres psql -U postgres -d airflow -tAc \
+      "select dag_id || ' ' || run_id || ' ' || state from dag_run where state in ('running','queued')" 2>/dev/null) || return 2
+  echo "$rows" | grep -E "^($(echo "$TRACKED_DAGS" | tr ' ' '|')) " || true
+}
+
+superset_seed_in_flight() {
+  # A re-seed rewrites slices (datasource_id/query_context), so mid-seed the
+  # chart gates are exactly as meaningless as mid-pipeline mart counts.
+  case "$(docker inspect superset-setup --format '{{.State.Status}}' 2>/dev/null)" in
+    running|created|restarting) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+refuse_verify() {  # refuse_verify <headline> [detail]
+  echo
+  echo "REFUSED: $1"
+  [ -n "${2:-}" ] && echo "  $2"
+  echo "  No data verdict was produced — marts and charts are only assessable once"
+  echo "  the platform is at rest. Inspect / wait with:"
+  echo "      docker exec postgres psql -U postgres -d airflow -tAc \\"
+  echo "        \"select dag_id, run_id, state from dag_run where state not in ('success','failed')\""
+  echo
+  echo "OVERALL: CANNOT VERIFY — $1 (exit $EXIT_CANNOT_VERIFY)"
+}
+
+verify_at_rest() {
+  # 0 = safe to emit a data verdict; EXIT_CANNOT_VERIFY = refused.
+  local runs rc
+  runs=$(inflight_dag_runs); rc=$?
+  if [ "$rc" -eq 2 ]; then
+    refuse_verify "pipeline status unknown — cannot verify" \
+      "postgres/airflow dag_run is unreadable (metadata db or container down)"
+    return "$EXIT_CANNOT_VERIFY"
+  fi
+  if [ -n "$runs" ]; then
+    echo "$runs" | sed 's/^/      in flight: /'
+    refuse_verify "pipeline in flight — cannot verify" \
+      "$(printf '%s\n' "$runs" | grep -c .) run(s) running/queued for: $(echo "$TRACKED_DAGS" | tr ' ' ', ')"
+    return "$EXIT_CANNOT_VERIFY"
+  fi
+  if superset_seed_in_flight; then
+    refuse_verify "superset re-seed in flight — cannot verify" \
+      "container superset-setup has not finished (dashboard slices still being rewritten)"
+    return "$EXIT_CANNOT_VERIFY"
+  fi
+  echo "  at-rest check: ok (no tracked pipeline DAG run in flight)"
+  return 0
 }
 
 # --- phases ---------------------------------------------------------------
@@ -164,6 +269,8 @@ phase_seed_superset() {
 
 phase_verify() {
   echo "=== Phase 8: VERIFY ==="
+  # 8-pre: never emit a data verdict for a platform that is still moving
+  verify_at_rest || exit "$EXIT_CANNOT_VERIFY"
   # 8a: structural checks (DB-level; see verify_seed.sh for the queries)
   bash "$DATALAB/superset/verify_seed.sh" > "$LOG_DIR/verify_seed.out" 2>&1 || fail "verify_seed.sh"
   grep -E "per-dashboard: 9 = [0-9]+" "$LOG_DIR/verify_seed.out" | tail -1
@@ -175,12 +282,43 @@ phase_verify() {
   [ "$n_null_ds" -eq 0 ] && pass "datasource_id all set" || fail "$n_null_ds charts missing datasource_id"
   [ "$n_null_qc" -eq 0 ] && pass "query_context all set" || fail "$n_null_qc charts missing query_context"
 
-  # 8b: data actually flowed through (raw > 0, marts populated, staging fresh)
-  local raw mart_tbls
+  # 8b: data actually flowed through (raw loaded, mart layer populated)
+  # raw_* is loaded by ingest COPY/INSERT, which IS counted by n_live_tup, so the
+  # estimate is usable there (9,429,746 estimate vs 9,431,972 exact on dev,
+  # 0.02% off a 100k threshold). Marts are CTAS-built and need the row probe.
+  local raw marts m_total m_pop m_empty
   raw=$(docker exec postgres psql -U postgres -d grocery -tAc "select coalesce(sum(n_live_tup),0) from pg_stat_user_tables where schemaname like 'raw_%'")
-  mart_tbls=$(docker exec postgres psql -U postgres -d grocery -tAc "select count(*) from pg_stat_user_tables where schemaname='mart' and n_live_tup>0")
+  marts=$(marts_populated)
+  IFS='|' read -r m_total m_pop m_empty <<<"$marts"
   [ "${raw:-0}" -gt 100000 ] && pass "raw populated ($raw rows)" || fail "raw empty-ish ($raw)"
-  [ "${mart_tbls:-0}" -ge 42 ] && pass "42 marts populated" || fail "only $mart_tbls populated marts"
+  if [ "${m_pop:-0}" -ge 42 ]; then
+    pass "42 marts populated ($m_pop/${m_total:-0} mart relations hold rows)"
+  else
+    fail "only ${m_pop:-0} of ${m_total:-0} populated marts (empty: ${m_empty:-unknown})"
+  fi
+
+  # 8b-ii: the EDW must not hold MORE rows than the source it was loaded from.
+  # A row-count floor is not a data-correctness check: on 2026-09-21 the ingest
+  # was reading the *previous* host's Verisim through a stale IP and loaded
+  # 1,136,360 foreign transactions against a 98,112-row source, and every check
+  # above still passed (t_05b48b69). The full per-table invariant runs in the
+  # ingest DAG (verify_raw_vs_source); these are the load-bearing tables.
+  check_no_excess() {  # check_no_excess <raw relation> <source relation>
+    local r s
+    r=$(docker exec postgres psql -U postgres -d grocery -tAc "select count(*) from $1" 2>/dev/null | tr -d ' ')
+    s=$(docker exec verisim-grocery psql -U verisim -d grocery -tAc "select count(*) from $2" 2>/dev/null | tr -d ' ')
+    if [ -z "$r" ] || [ -z "$s" ]; then fail "parity $1 vs $2 (unreadable)"; return; fi
+    echo "  parity $1=$r <= $2=$s"
+    if [ "$r" -gt "$s" ]; then
+      fail "parity $1 vs $2 ($r raw > $s source)"
+    else
+      pass "parity $2 ($r of $s rows)"
+    fi
+  }
+  check_no_excess raw_pos.transactions pos.transactions
+  check_no_excess raw_pos.transaction_items pos.transaction_items
+  check_no_excess raw_timeclock.events timeclock.events
+  check_no_excess raw_hr.employees hr.employees
 
   # 8c: service endpoints
   for svc in "8080/health|airflow" "8088/|superset" "8082/|dbt-docs" "8010/health|verisim-api" "8501/|verisim-ui"; do

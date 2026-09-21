@@ -25,9 +25,28 @@ fresh-wipe test including this script's data checks. Run it only when
 explicitly requested; see the Hermes skill `e2e-testing` for the run protocol
 and pass-invalidation rules.
 
+bash test-full-cycle-guard.sh  # offline tests for the at-rest guard (no state touched)
+
 bash e2e-test.sh                # data-correctness checks against a running stack
 
 Exit 0 = all tests pass, 1 = any test fails.
+
+### `full-cycle.sh` exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | every gate passed on an untouched run |
+| 1 | a gate failed (see the phase output / log) |
+| 2 | bad usage |
+| 3 | **REFUSED — no data verdict produced** |
+
+Exit 3 means the platform was not at rest: a tracked pipeline DAG run
+(`grocery_complete_pipeline`, `grocery_dbt`, `grocery_ingest_api`) was still
+running/queued, a Superset re-seed was still running, or the Airflow metadata
+db was unreadable so the run state was unknown. Marts legitimately do not exist
+until `transform` completes, so `--verify` refuses rather than reporting the
+pipeline's own progress as a data failure ("only 0 populated marts", "N charts
+missing query_context"). Wait for the runs to finish and re-run `--verify`.
 
 ## Test Phases
 

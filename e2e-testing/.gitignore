@@ -3,3 +3,6 @@
 *.bak
 __pycache__/
 *.pyc
+# test-full-cycle-guard.sh scratch (stubbed docker shim + per-case logs)
+stub/
+logs/

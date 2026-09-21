@@ -31,9 +31,24 @@ services:
     volumes:
       - ${CONF}/verisim-grocery:/var/lib/postgresql/data
     restart: unless-stopped
+    # `datalab_shared` carries the source (API on 8000, DB on 5432) to the
+    # Airflow worker, which must reach it as `verisim-grocery` — never through
+    # the host's IP. A stale IP makes the ingest read a *different* instance's
+    # dataset instead of failing (t_05b48b69). This stack owns the network;
+    # airflow/compose.yaml joins it as external.
+    networks:
+      - default
+      - datalab_shared
     labels:
       - homepage.group=${HOMEPAGE_GROUP}
       - homepage.name=Verisim Grocery
       - homepage.icon=docker.png
       - homepage.href=http://${IP}:${VERISIM_UI_PORT:-8501}/
       - "homepage.description=Grocery data generator — UI: no auth | API: no auth | DB: verisim/verisim"
+
+networks:
+  default:
+    name: verisim-grocery_default
+  datalab_shared:
+    name: datalab_shared
+    driver: bridge

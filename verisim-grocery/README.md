@@ -16,6 +16,11 @@ On first start, the generator auto-backfills 30 days of transaction history, the
 
 ## Key Config Files
 - `verisim-grocery/compose.yaml` — pulls `smiti/verisim-grocery:latest`, exposes ports 5499, 8010, 8501
+- **Networks:** the container sits on `verisim-grocery_default` plus `datalab_shared`.
+  The Airflow worker joins `datalab_shared` to reach the source **by service name**
+  (`verisim-grocery:8000` for the API, `:5432` for the DB) instead of the host IP.
+  Never address the source by host IP from the pipeline: a stale `IP` value makes the
+  ingest silently read a *different* instance's dataset (t_05b48b69, 2026-09-21).
 
 ## Usage Notes
 - **This is the release-mode stack** — pulls from Docker Hub, no source code needed

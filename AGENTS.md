@@ -243,12 +243,13 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v Exited
 | Superset shows no data | Has the pipeline run successfully? | Check mart tables: `docker exec postgres psql -U postgres -d grocery -c "SELECT COUNT(*) FROM mart.mart_daily_revenue"` |
 | Container won't start | Port conflict? | `ss -tlnp | grep <port>` |
 | dbt test fails | Schema mismatch? | Re-run ingest first, then dbt |
+| Pipeline run is stuck on `wait_for_verisim_readiness` | Is verisim still bootstrapping/backfilling? | `curl -s http://localhost:8010/grocery/status` (want `mode: realtime`) and `curl -s http://localhost:8010/grocery/stats/backfill-progress` (want `in_progress: false`) — the run resumes by itself once the source is ready |
 | superset-init taking forever | Normal on first run | Wait 20-40 min; check `/tmp/superset-import.log` |
 
 ## Pipeline Gotchas
 
 - **DAGs start paused** — unpause before triggering (get a JWT first: `POST http://localhost:8080/auth/token`): `curl -X PATCH http://localhost:8080/api/v2/dags/<dag_id> -H 'Content-Type: application/json' -d '{"is_paused": false}'` with the `Authorization: Bearer <access_token>` header
-- **First pipeline run on new install may fail** on `stg_pos_loyalty_point_transactions` (verisim still bootstrapping DB) — re-run passes
+- **The first pipeline run waits for verisim** — `grocery_complete_pipeline` begins with the `wait_for_verisim_readiness` sensor (`airflow/dags/verisim_readiness.py`), which holds `ingest` until the source API is healthy, the generator is in `realtime` mode (bootstrap + 30-day backfill finished) and the critical source tables are non-empty. Unpausing the DAGs during provisioning is therefore safe: instead of failing once on `stg_pos_loyalty_point_transactions` (its raw table is never created when the endpoint returns no rows), the run waits for its input. Tuning: `VERISIM_READINESS_TIMEOUT_MIN` (default 120 min), `VERISIM_READINESS_POKE_S` (default 60 s)
 - **dbt-docs**: runs `dbt docs generate` as same UID as Airflow. Don't change `user:` in dbt-docs/compose.yaml or PermissionError on logs/dbt.log
 - **Ingest uses DROP TABLE ... CASCADE** for full-refresh tables because dbt staging views depend on raw tables; plain DROP TABLE raises DependentObjectsStillExist
 
