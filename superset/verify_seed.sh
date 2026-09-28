@@ -41,4 +41,10 @@ select 'NULL query_context: ' || count(*) from slices where query_context is nul
 SQL
 
 echo
+echo "=== [4b] dataset column metadata gate (mart datasets vs the EDW) ==="
+bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_dataset_metadata.sh"
+MD_RC=$?
+echo
+
 echo "=== charts per dashboard (expect: 1>=8, 2>=8, 3>=14, 4>=6, 5>=10, 6>=7, 7>=6, 8>=8, 9=8, 10>=8, 11>=9) ==="
+exit "$MD_RC"

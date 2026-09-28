@@ -655,6 +655,15 @@ models:
   - name: completed_loads
     tests:
     - not_null
+  # t_56298217: this entry is the union of the two blocks that used to define
+  # it. The duplicate block at the end of the file carried the row-count test
+  # below and a subset of these column tests; the subset is dropped as
+  # redundant, the row-count test is kept, and the duplicate block is gone (a
+  # model may be declared only once).
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 10000
 - name: mart_attendance_summary
   columns:
   - name: employee_id
@@ -911,155 +920,148 @@ models:
   - dbt_expectations.expect_table_row_count_to_be_between:
       min_value: 1
       max_value: 10000
+# ── Transport & Logistics / Loyalty domain blocks ─────────────────────────
+# NOTE (t_56298217): these blocks were appended by 1a086926 with two extra
+# spaces of indentation, which nested every one of them inside the
+# `data_tests` list of mart_order_cycle_time and added a second `data_tests`
+# key on that model at the end of the file. YAML keeps the last key, so the
+# loader dropped the whole first list: the six models below had no live schema
+# entry (so no tests ran for them at all), and mart_order_cycle_time ran the
+# trailing block's row-count bound (1..100000) instead of its own (1..10000).
+# Restored to column 0. The three models that also have a live entry earlier
+# in this file (mart_loyalty_cohort, mart_fleet_utilization,
+# mart_transport_daily_metrics) are defined there only — a model may not be
+# declared twice; the union of the two blocks is documented at each site.
 
-  # ── int_transport_enriched ────────────────────────────────────────────────
-  # Grain: one row per load_id
+# ── int_transport_enriched ────────────────────────────────────────────────
+# Grain: one row per load_id
 
-  - name: int_transport_enriched
-    columns:
-      - name: load_id
-        tests: [unique, not_null]
-      - name: truck_id
-        tests: [not_null]
-      - name: warehouse_location_id
-        tests: [not_null]
-      - name: destination_location_id
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 100000
-
-  # ── mart_route_efficiency ─────────────────────────────────────────────────
-  # Grain: one row per route_key (warehouse_location_id -> destination_location_id)
-
-  - name: mart_route_efficiency
-    columns:
-      - name: route_key
-        tests: [unique, not_null]
-      - name: warehouse_location_id
-        tests: [not_null]
-      - name: destination_location_id
-        tests: [not_null]
-      - name: total_loads
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 1000
-      - dbt_expectations.expect_column_values_to_be_between:
-          column_name: on_time_rate_pct
-          min_value: 0
-          max_value: 100
-
-  # ── mart_fleet_cost ───────────────────────────────────────────────────────
-  # Grain: one row per (truck_id, driver_id)
-
-  - name: mart_fleet_cost
-    columns:
-      - name: truck_id
-        tests: [not_null]
-      - name: driver_id
-        tests: [not_null]
-      - name: total_loads
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 10000
-
-  # ── mart_fleet_utilization (extended with cost) ───────────────────────────
-  # Grain: one row per truck_id
-
-  - name: mart_fleet_utilization
-    columns:
-      - name: truck_id
-        tests: [unique, not_null]
-      - name: license_plate
-        tests: [unique, not_null]
-      - name: total_loads
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_column_values_to_be_in_set:
-          column_name: utilization_status
-          value_set: ['ACTIVE', 'IDLE', 'INACTIVE']
-
-  # ── mart_transport_daily_metrics (extended with cost) ─────────────────────
-  # Grain: one row per (load_date, warehouse_location_id)
-
-  - name: mart_transport_daily_metrics
-    columns:
-      - name: load_date
-        tests: [not_null]
-      - name: warehouse_location_id
-        tests: [not_null]
-      - name: total_loads
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 10000
-
-  # ── int_loyalty_enriched ──────────────────────────────────────────────────
-  # Grain: one row per (member_id, activity_date, pt_id) — point-event grain
-
-  - name: int_loyalty_enriched
-    columns:
-      - name: member_id
-        tests: [not_null]
-      - name: activity_date
-        tests: [not_null]
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 1000000
-
-  # ── mart_loyalty_rfm ──────────────────────────────────────────────────────
-  # Grain: one row per member_id
-
-  - name: mart_loyalty_rfm
-    columns:
-      - name: member_id
-        tests: [unique, not_null]
-      - name: rfm_segment
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['Champions', 'Loyal', 'At Risk', 'Hibernating', 'New', 'Regular']
-      - name: recency_score
-      - name: frequency_score
-      - name: monetary_score
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 100000
-
-  # ── mart_loyalty_engagement ───────────────────────────────────────────────
-  # Grain: one 'ALL' rollup row + one row per current_tier
-
-  - name: mart_loyalty_engagement
-    columns:
-      - name: current_tier
-        tests: [not_null]
-      - name: points_liability
-    data_tests:
-      - dbt_expectations.expect_table_row_count_to_be_between:
-          min_value: 1
-          max_value: 100
-
-  # ── mart_loyalty_cohort (grain documented) ────────────────────────────────
-  # Grain: one row per member_id
-
-  - name: mart_loyalty_cohort
-    columns:
-      - name: member_id
-        tests: [unique, not_null]
-      - name: loyalty_tier
-        tests: [not_null]
-      - name: points_balance
-        tests: [not_null]
-      - name: total_spend
+- name: int_transport_enriched
+  columns:
+  - name: load_id
+    tests: [unique, not_null]
+  - name: truck_id
+    tests: [not_null]
+  - name: warehouse_location_id
+    tests: [not_null]
+  - name: destination_location_id
+    tests: [not_null]
   data_tests:
   - dbt_expectations.expect_table_row_count_to_be_between:
       min_value: 1
       max_value: 100000
+
+# ── mart_route_efficiency ─────────────────────────────────────────────────
+# Grain: one row per route_key (warehouse_location_id -> destination_location_id)
+
+- name: mart_route_efficiency
+  columns:
+  - name: route_key
+    tests: [unique, not_null]
+  - name: warehouse_location_id
+    tests: [not_null]
+  - name: destination_location_id
+    tests: [not_null]
+  - name: total_loads
+    tests: [not_null]
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 1000
+  - dbt_expectations.expect_column_values_to_be_between:
+      column_name: on_time_rate_pct
+      min_value: 0
+      max_value: 100
+
+# ── mart_fleet_cost ───────────────────────────────────────────────────────
+# Grain: one row per (truck_id, driver_id)
+
+- name: mart_fleet_cost
+  columns:
+  - name: truck_id
+    tests: [not_null]
+  - name: driver_id
+    tests: [not_null]
+  - name: total_loads
+    tests: [not_null]
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 10000
+
+# ── mart_fleet_utilization (extended with cost) ───────────────────────────
+# Grain: one row per truck_id
+# Declared once, at line ~619. The duplicate block that used to sit here added
+# no coverage that the retained entry does not already carry: truck_id and
+# license_plate are unique+not_null, total_loads is not_null, and
+# utilization_status ∈ {ACTIVE, IDLE, INACTIVE} is asserted by the retained
+# column-level accepted_values test (the dropped block used the equivalent
+# dbt_expectations.expect_column_values_to_be_in_set on the same column/values).
+# The tail block also carried the same three column tests, so nothing is lost.
+
+# ── mart_transport_daily_metrics (extended with cost) ─────────────────────
+# Grain: one row per (load_date, warehouse_location_id)
+# Declared once, at line ~644, where the union of both blocks now lives: the
+# retained entry has every column the dropped tail block tested (load_date,
+# warehouse_location_id, total_loads are a subset of its four) and gained the
+# tail block's only extra assertion, the row-count bound (t_56298217).
+
+# ── int_loyalty_enriched ──────────────────────────────────────────────────
+# Grain: one row per (member_id, activity_date, pt_id) — point-event grain
+# (t_56298217: the not_null on activity_date below is what exposed the model's
+#  left join emitting all-null rows for members with no point event; the join is
+#  now inner — see the model header. Before the marts.yml duplicate-key fix this
+#  entry was dead, so no test had ever run against this model.)
+
+- name: int_loyalty_enriched
+  columns:
+  - name: member_id
+    tests: [not_null]
+  - name: activity_date
+    tests: [not_null]
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 1000000
+
+# ── mart_loyalty_rfm ──────────────────────────────────────────────────────
+# Grain: one row per member_id
+
+- name: mart_loyalty_rfm
+  columns:
+  - name: member_id
+    tests: [unique, not_null]
+  - name: rfm_segment
+    tests:
+    - not_null
+    - accepted_values:
+        values: ['Champions', 'Loyal', 'At Risk', 'Hibernating', 'New', 'Regular']
+  - name: recency_score
+  - name: frequency_score
+  - name: monetary_score
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 100000
+
+# ── mart_loyalty_engagement ───────────────────────────────────────────────
+# Grain: one 'ALL' rollup row + one row per current_tier
+
+- name: mart_loyalty_engagement
+  columns:
+  - name: current_tier
+    tests: [not_null]
+  - name: points_liability
+  data_tests:
+  - dbt_expectations.expect_table_row_count_to_be_between:
+      min_value: 1
+      max_value: 100
+
+# ── mart_loyalty_cohort (grain documented) ────────────────────────────────
+# Grain: one row per member_id
+# Declared once, at line ~189, and that entry is byte-for-byte the same test
+# set as the duplicate block that used to sit here (member_id unique+not_null,
+# loyalty_tier/points_balance not_null, row count 1..100000), so nothing is
+# lost. The trailing `data_tests` key that used to follow this block — the one
+# YAML's last-key-wins rule applied to mart_order_cycle_time — was this
+# entry's row-count test; it is kept on the entry it belongs to, at line ~189.

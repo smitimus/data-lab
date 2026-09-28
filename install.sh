@@ -143,6 +143,54 @@ generate_encryption_key() {
 }
 
 # ------------------------------------------------------------
+# is_shipped_default VALUE
+#
+# Returns 0 (true) if VALUE is still a shipped default from global.env — empty,
+# a GENERATE_ME_*/YOUR_* placeholder, or one of the two key-shaped defaults
+# (AIRFLOW_FERNET_KEY, ENCRYPTION_KEY), which are valid keys that decode to
+# "data-lab-shipped-default-key-00N" and so cannot be a placeholder token.
+#
+# Keep in step with generate-secrets.sh::is_missing() + is_shipped_default_key():
+# both scripts decide "is this value still the tree's, or this host's" and they
+# must answer the same way (t_35b04ad9).
+# ------------------------------------------------------------
+is_shipped_default() {
+  local val="$1" decoded
+  [ -z "$val" ] && return 0
+  case "$val" in GENERATE_ME_*|YOUR_*) return 0 ;; esac
+  decoded="$(printf '%s' "$val" | tr '_-' '/+' | base64 -d 2>/dev/null)" || return 1
+  case "$decoded" in data-lab-shipped-default-key-*) return 0 ;; esac
+  return 1
+}
+
+# ------------------------------------------------------------
+# patch_global_secret KEY VALUE
+#
+# Writes VALUE into global.env for KEY — but only while global.env still holds
+# a shipped default there.  global.env is what global-env-sync.py pushes into
+# every service .env, so a secret left at its shipped default in global.env
+# OVERWRITES the per-host value fill_env just generated: that is how the five
+# published defaults of b18088e came to be live on every host (t_35b04ad9).
+#
+# On a re-run against a live instance global.env already carries that host's
+# real values, and they must survive: this script promises not to overwrite
+# existing .env files, and rotating a live instance's secrets behind its back —
+# or handing Dockhand a new at-rest key, which makes its stored credentials
+# unreadable — would break the same promise.  Anchored on the whole line, so the
+# shipped-default comments above each key survive.
+# ------------------------------------------------------------
+patch_global_secret() {
+  local key="$1" value="$2" current
+  current="$(sed -n "s|^${key}=||p" global.env | head -1 | sed 's/[[:space:]]*#.*$//')"
+  if is_shipped_default "$current"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" global.env
+    log "Set ${key} in global.env (replaced a shipped default)"
+  else
+    log "Kept ${key} in global.env (already per-host)"
+  fi
+}
+
+# ------------------------------------------------------------
 # fill_env EXAMPLE TARGET IP TZ INSTALL_DIR DOCKER_GID
 #           FERNET_KEY SHARED_SECRET ENC_KEY CONF_DIR
 #
@@ -151,6 +199,7 @@ generate_encryption_key() {
 #
 # Placeholder tokens used in templates:
 #   YOUR_SERVER_IP          → detected LAN IP of this machine
+#   YOUR_HOSTNAME           → short hostname of this machine (for HOMEPAGE_ALLOWED_HOSTNAMES)
 #   YOUR_TIMEZONE           → system timezone (e.g. America/New_York)
 #   YOUR_INSTALL_DIR        → path where the repo was cloned
 #   YOUR_CONF_DIR           → path where runtime config/data is stored
@@ -163,10 +212,12 @@ fill_env() {
   local example="$1" target="$2"
   local ip="$3" tz="$4" install_dir="$5" docker_gid="$6"
   local fernet_key="$7" shared_secret="$8" enc_key="$9" conf_dir="${10}"
+  local host_short; host_short="$(hostname -s 2>/dev/null)" || host_short="localhost"
 
   sed \
     -e "s|YOUR_SERVER_IP|${ip}|g" \
     -e "s|YOUR_TIMEZONE|${tz}|g" \
+    -e "s|YOUR_HOSTNAME|${host_short}|g" \
     -e "s|YOUR_INSTALL_DIR|${install_dir}|g" \
     -e "s|YOUR_CONF_DIR|${conf_dir}|g" \
     -e "s|DETECT_ME_DOCKER_GID|${docker_gid}|g" \
@@ -242,6 +293,7 @@ SUP_URL="${SUP_URL:-http://localhost:8088}"
 SUP_META_DB="${SUP_META_DB:-superset}"   # Superset's own meta DB, in the postgres container
 EDW_DB="${EDW_DB:-grocery}"              # the DB holding the mart schema
 DASH_DIR="${DASH_DIR:-}"                 # defaulted against INSTALL_DIR in superset_dashboards()
+RETIRED_LIST="${RETIRED_LIST:-}"         # idem (superset/dashboards/retired_dashboards.txt)
 MART_MIN="${MART_MIN:-42}"               # the gate's bar: 42 mart relations (full-cycle.sh 8b)
 DASH_MIN="${DASH_MIN:-11}"               # the gate's bar: 11+ dashboards
 DASH_WAIT="${DASH_WAIT:-120}"            # seconds to wait for the first transform
@@ -377,46 +429,15 @@ else:
 }
 
 # ------------------------------------------------------------
-# bundle_charts_zip ZIP OUT — a chart-importable copy of a dashboard bundle.
-#
-# Superset's dashboard importer calls import_chart(config, overwrite=False)
-# (superset/commands/dashboard/importers/v1/__init__.py) — hardcoded — so a chart
-# that already exists is returned UNTOUCHED and the bundle's query_context never
-# reaches it. That is why an instance whose bundled charts were created before
-# the bundle carried a query_context stays broken through any number of
-# re-imports, and why the deploy has to refresh the charts itself.
-#
-# The CHART importer passes the caller's overwrite through, so re-submitting the
-# bundle's object set through /api/v1/chart/import/ is what actually updates
-# those charts. Two things make the copy acceptable to it: metadata.yaml declares
-# `type: Dashboard` and that command validates it against `Slice`, so it is
-# rewritten here; and the dashboards/ entries are dropped, because a chart
-# import has no schema for them (load_configs skips a prefix it has no schema
-# for, but so does the dashboard import re-run, which would be a no-op).
+# superset_token — an admin JWT from Superset's own login endpoint, or "" on any
+# failure. Shared by the import and the retire step so both authenticate the
+# same way and the credentials live in one place.
 # ------------------------------------------------------------
-bundle_charts_zip() { # ZIP OUT
-  # stdlib only: the guest is a bare Debian host (no PyYAML), which is also why
-  # zipquery above parses the bundle with re, not yaml. Only one line of
-  # metadata.yaml changes, so it is rewritten in place.
-  python3 - "$1" "$2" <<'PY' || return 1
-import re
-import sys
-import zipfile
-
-src, dst = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(src) as zin:
-    keep = [(i, zin.read(i.filename)) for i in zin.infolist()
-            if "/dashboards/" not in i.filename]
-with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-    for info, data in keep:
-        if info.filename.endswith("metadata.yaml"):
-            # what ImportChartsCommand validates against, in place of Dashboard
-            data, n = re.subn(r"(?m)^type:\s*\S+", "type: Slice", data.decode())
-            if n != 1:
-                raise SystemExit("metadata.yaml has no single `type:` line (found %d)" % n)
-            data = data.encode()
-        zout.writestr(info.filename, data)
-PY
+superset_token() {
+  curl -s --max-time 15 -X POST "$SUP_URL/api/v1/security/login" \
+      -H 'Content-Type: application/json' \
+      -d '{"username":"admin","password":"admin","provider":"db"}' \
+      | python3 -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null || true
 }
 
 # ------------------------------------------------------------
@@ -424,11 +445,8 @@ PY
 # printed). Captures the HTTP status AND the response body of every import.
 # ------------------------------------------------------------
 import_dashboards() {
-  local tok zip pw_json code body rc=0 charts_zip ccode
-  tok="$(curl -s --max-time 15 -X POST "$SUP_URL/api/v1/security/login" \
-      -H 'Content-Type: application/json' \
-      -d '{"username":"admin","password":"admin","provider":"db"}' \
-      | python3 -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null || true)"
+  local tok zip pw_json code body rc=0
+  tok="$(superset_token)"
   if [[ -z "$tok" ]]; then
     warn "could not authenticate to Superset (admin/admin) — dashboards NOT imported"
     warn "  re-run once Superset is healthy: bash ${INSTALL_DIR}/install.sh --dashboards-only"
@@ -442,40 +460,14 @@ import_dashboards() {
     # overwrite=true is what makes a re-run work at all: Superset 4.1.2 rejects
     # the whole bundle with 422 ("already exists and `overwrite=true` was not
     # passed") when a bundled dashboard uuid is already present, and that
-    # rejection is atomic. Note that it only governs the DASHBOARDS: existing
-    # charts and datasets are returned untouched, which is why the chart refresh
-    # below is a separate call.
+    # rejection is atomic. Existing charts/datasets are returned untouched by
+    # the importer, so repeating this is safe.
     code="$(curl -s --max-time 300 -o "$body" -w '%{http_code}' \
         -X POST "$SUP_URL/api/v1/dashboard/import/" \
         -H "Authorization: Bearer ${tok}" -H 'Accept: application/json' \
         -F "formData=@$zip" -F "passwords=$pw_json" -F 'overwrite=true' 2>/dev/null || echo 000)"
     if [[ "$code" == "200" ]]; then
       log "imported $(basename "$zip") (HTTP 200, overwrite=true)"
-      # ...but the dashboard import never overwrites an existing CHART (see
-      # bundle_charts_zip), so the bundle's charts are refreshed through the
-      # chart importer, which does. Without this an instance that already has the
-      # bundle's charts keeps whatever query_context they were created with —
-      # exactly the state verify_superset() below fails on.
-      charts_zip="$(mktemp --suffix=.zip)"
-      if bundle_charts_zip "$zip" "$charts_zip"; then
-        cbody="$(mktemp)"
-        ccode="$(curl -s --max-time 300 -o "$cbody" -w '%{http_code}' \
-            -X POST "$SUP_URL/api/v1/chart/import/" \
-            -H "Authorization: Bearer ${tok}" -H 'Accept: application/json' \
-            -F "formData=@$charts_zip" -F "passwords=$pw_json" -F 'overwrite=true' 2>/dev/null || echo 000)"
-        if [[ "$ccode" == "200" ]]; then
-          log "  refreshed $(basename "$zip") charts (HTTP 200, overwrite=true)"
-        else
-          warn "  chart refresh for $(basename "$zip") -> HTTP $ccode (charts kept their old query_context)"
-          report_import_body "$cbody"
-          rc=1
-        fi
-        rm -f "$cbody"
-      else
-        warn "  could not derive a chart copy of $(basename "$zip") — charts not refreshed"
-        rc=1
-      fi
-      rm -f "$charts_zip"
     else
       warn "import $(basename "$zip") -> HTTP $code (nothing was imported: the request is atomic)"
       report_import_body "$body"
@@ -517,6 +509,291 @@ check_zip_landed() { # ZIP — per-object: did every bundled object make it into
   return $bad
 }
 
+# ------------------------------------------------------------
+# retire_dashboards LIST — delete the dashboards an OLDER bundle shipped and the
+# current one does not (superset/dashboards/retired_dashboards.txt, which carries
+# the why for each). The import is additive: `overwrite=true` re-creates and
+# updates everything a bundle carries and deletes nothing, so an instance that
+# imported an older bundle would keep such a dashboard — with tiles bound to
+# charts that no longer exist — forever. Idempotent: a uuid that is not present
+# is a no-op, and the DELETE goes through the API so Superset's own relationship
+# handling runs. 0 = retired (or already absent); 1 = at least one delete failed.
+# ------------------------------------------------------------
+retire_dashboards() { # LIST
+  local list="${1:-}" uuid title id tok code body killed=0 bad=0
+  [[ -n "$list" && -f "$list" ]] || return 0
+  tok="$(superset_token)"
+  if [[ -z "$tok" ]]; then
+    warn "could not authenticate to Superset (admin/admin) — retired dashboards NOT removed"
+    return 1
+  fi
+  body="$(mktemp)"
+  while read -r uuid title || [[ -n "$uuid" ]]; do
+    uuid="$(printf '%s' "$uuid" | tr -d '[:space:]')"
+    [[ -n "$uuid" ]] || continue
+    [[ "$uuid" == \#* ]] && continue
+    [[ "$uuid" == "uuid" ]] && continue
+    id="$(psql_q "$SUP_META_DB" "select id from dashboards where uuid = '$uuid'")"
+    if [[ -z "$id" ]]; then
+      continue
+    fi
+    code="$(curl -s --max-time 30 -o "$body" -w '%{http_code}' \
+        -X DELETE "$SUP_URL/api/v1/dashboard/$id" \
+        -H "Authorization: Bearer $tok" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" || "$code" == "404" ]]; then
+      log "  retired dashboard '$title' (id=$id, uuid=$uuid) — not in the bundle any more"
+      killed=$((killed + 1))
+    else
+      warn "retire '$title' (id=$id) -> HTTP $code"
+      report_import_body "$body"
+      bad=1
+    fi
+  done < "$list"
+  rm -f "$body"
+  [[ "$killed" -gt 0 ]] && log "  $killed retired dashboard(s) removed"
+  return $bad
+}
+
+# ------------------------------------------------------------
+# reconcile_dashboard_links LIST — after the import, make each bundled dashboard's
+# LINKS (dashboard_slices) equal the chart ids its position_json names.
+#
+# WHY the import alone is not enough
+# ----------------------------------
+# A Superset dashboard stores its charts twice: position_json (the tiles, each
+# CHART node naming a slice id) and dashboard_slices (the chart -> dashboard
+# links the app hydrates from). Superset's importer only ADDS to the second one
+# — superset/commands/dashboard/importers/v1/__init__.py inserts an entry for
+# every chart the imported layout names and never removes what an earlier
+# import, seed or `superset-setup` run left behind. A chart that is linked but
+# not placed in the layout is still DRAWN: the frontend appends it. So an
+# instance that has seen two generations of the same chart renders both:
+#
+#   dash 3 "Grocery Overview"  16 tiles for the 8 charts its layout names
+#   dash 1 "Grocery Operations" 90 tiles for the 10 its layout names
+#
+# (measured 2026-09-21 on test: `comps` in the DOM gate == the linked-slice
+# count, 16 and 90 — every API and DB gate answered 200/0 through it.)
+#
+# and the mirror image: superset/setup.py's grocery seed *replaces* dash 3's
+# links with its own chart generation, so the layout's ids end up unlinked and
+# those 8 tiles render "There is no chart definition associated with this
+# component". Both directions are the same invariant:
+#
+#        dashboard_slices  ==  the slice ids position_json names
+#
+# WHAT IT DOES
+# ------------
+# For the dashboards THIS import just shipped (their uuids come from the bundle):
+# unlink the links the layout does not name, and re-link anything the layout
+# names that is not linked. A chart the layout names is therefore never
+# unlinked, a dashboard whose layout names no chart is left untouched, and no
+# `slices` row is ever created or deleted — only the M2M relation is rewritten.
+# A layout slot whose slice row does not exist anywhere (a dangling tile) is
+# reported and fails the run: that tile cannot render.
+#
+# The relation has no REST setter (DashboardPutSchema carries no `charts`
+# field), and Superset's own importer writes the table directly, so this does
+# too — through the same psql path as the rest of the gate. Idempotent: a
+# second run reports "0 unlinked / 0 linked".
+# ------------------------------------------------------------
+reconcile_dashboard_links() { # LIST (uuid<TAB>title lines)
+  local list="${1:-}" uuids out pre post
+  local unlinked=0 linked=0 dangling=0 bad=0
+  [[ -n "$list" ]] || return 0
+  # Only uuid-shaped lines: a bundle file whose uuid could not be read must not
+  # turn into a SQL fragment.
+  uuids="$(printf '%s\n' "$list" | cut -f1 | tr 'A-Z' 'a-z' \
+           | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+           | sed "s/^/'/; s/\$/'/" | paste -sd, -)"
+  [[ -n "$uuids" ]] || return 0
+
+  # `named` = the distinct chart ids the layout names, i.e. the contract. Every
+  # query below is scoped by it, and the delete only touches dashboards that name
+  # at least one chart, so an empty or odd layout can never blank a dashboard.
+  local named="select distinct d.id as dashboard_id, (e.v->'meta'->>'chartId')::int as slice_id
+                 from dashboards d, jsonb_each(d.position_json::jsonb) as e(k, v)
+                where d.id in (select id from targets)
+                  and e.v->>'type' = 'CHART'
+                  and e.v->'meta'->>'chartId' ~ '^[0-9]+\$'"
+  local targets="select id from dashboards where lower(uuid::text) in ($uuids)"
+  local state="select d.id || '|' || d.dashboard_title || '|'
+                       || (select count(*) from named n where n.dashboard_id = d.id) || '|'
+                       || (select count(*) from dashboard_slices ds where ds.dashboard_id = d.id)
+                  from dashboards d where d.id in (select id from targets) order by d.id"
+
+  pre="$(psql_q "$SUP_META_DB" "with targets as ($targets), named as ($named) $state")"
+
+  # what the layout names but Superset has no slice row for (cannot render)
+  dangling="$(psql_q "$SUP_META_DB" "
+with targets as ($targets),
+     named as ($named)
+select count(*) from named n where not exists (select 1 from slices s where s.id = n.slice_id)")"
+
+  out="$(psql_q "$SUP_META_DB" "
+with targets as ($targets),
+     named as ($named),
+     dropped as (
+       delete from dashboard_slices ds
+        where ds.dashboard_id in (select dashboard_id from named)
+          and ds.slice_id not in (select slice_id from named)
+        returning 1),
+     added as (
+       insert into dashboard_slices (dashboard_id, slice_id)
+       select n.dashboard_id, n.slice_id from named n
+        where exists (select 1 from slices s where s.id = n.slice_id)
+          and not exists (select 1 from dashboard_slices ds
+                           where ds.dashboard_id = n.dashboard_id
+                             and ds.slice_id = n.slice_id)
+        returning 1)
+select (select count(*) from dropped) || '|' || (select count(*) from added)")"
+
+  if [[ -z "$out" ]]; then
+    warn "could not reconcile dashboard links — no answer from psql"
+    return 1
+  fi
+  IFS='|' read -r unlinked linked <<<"$out"
+  if ! [[ "$unlinked" =~ ^[0-9]+$ && "$linked" =~ ^[0-9]+$ ]]; then
+    warn "could not read the reconcile result (${out}) — links NOT verified"
+    return 1
+  fi
+
+  # The post-state, read back: the log shows the invariant, not just the intent.
+  post="$(psql_q "$SUP_META_DB" "with targets as ($targets), named as ($named) $state")"
+
+  local did dtitle slots links was
+  while IFS='|' read -r did dtitle slots links; do
+    [[ -n "${did:-}" ]] || continue
+    was="$(printf '%s\n' "$pre" | awk -F'|' -v id="$did" '$1 == id {print $4}')"
+    if [[ "$slots" == "$links" ]]; then
+      printf '        dashboard %s "%s": %s tile link(s) for %s layout slot(s)' \
+             "$did" "$dtitle" "$links" "$slots"
+      [[ "$was" != "$links" ]] && printf ' (was %s)' "$was"
+      printf '\n'
+    else
+      warn "  dashboard ${did} \"${dtitle}\": ${links} link(s) against ${slots} layout slot(s) — the page cannot match the layout"
+      bad=1
+    fi
+  done <<<"$post"
+
+  log "  reconciled: $unlinked orphan link(s) unlinked, $linked missing link(s) linked"
+  if [[ "${dangling:-0}" -gt 0 ]]; then
+    warn "$dangling layout slot(s) name a chart that does not exist — those tiles cannot render"
+    warn "  re-run once Superset has them: bash ${INSTALL_DIR}/install.sh --dashboards-only"
+    bad=1
+  fi
+  return $bad
+}
+
+# ------------------------------------------------------------
+# prune_superseded_charts LIST — delete the chart ROWS this import displaced.
+#
+# WHY
+# ---
+# A dashboard converges onto an existing row through its `slug`, but a CHART has
+# no such identity: superset/commands/chart/importers/v1/utils.py's import_chart()
+# looks the chart up by `uuid` and nothing else, so an export's chart and the
+# scripted seed's chart of the same name on the same dataset are two rows that
+# can never merge. On a virgin instance the seed runs first (it is a compose
+# service; the import only runs once the marts exist), so the import adds its own
+# generation next to the seed's and points the layout at it — Grocery Operations
+# ends up with 10 charts named twice (seed ids 9-18, bundle ids 97-106), the
+# seed's rows linked to nothing and placed nowhere.
+#
+# The two generations are not interchangeable rows to keep around: the seed's is
+# the FALLBACK a fresh instance renders before the import has run (a wipe cycle
+# has no import at all, and full-cycle.sh still certifies 11 dashboards on it),
+# and the import's is what every instance that runs the documented install step
+# renders. Grocery Operations has one owner — the bundle's layout — so what the
+# import displaces is deleted here rather than left as dead rows.
+#
+# WHAT IT DOES
+# ------------
+# Deletes a `slices` row only when ALL of these hold:
+#   * no dashboard's position_json names it (no tile renders it);
+#   * no dashboard links it (dashboard_slices) — the precedent is
+#     superset/create_data_quality_dashboard.py's _prune_duplicate_chart():
+#     unlink first, and delete only a chart no other dashboard uses (a chart
+#     another dashboard still links is kept);
+#   * a chart a dashboard THIS IMPORT SHIPPED names carries the same slice_name
+#     AND the same datasource_id — i.e. it is a superseded generation of a chart
+#     the import placed, never an unrelated chart.
+# These three hold for the WHOLE displaced generation only when the seed's own
+# dashboards stop adopting a Grocery Operations chart by name alone: dashboard 3
+# used to link the seed's "Labor Cost % of Revenue" chart on
+# mart_store_weekly_summary, which spared it here as "linked elsewhere"
+# (create_missing_dashboards.py now scopes its chart lookup to the dataset its
+# definition resolved — t_0f87aab9).
+# Scoped to the imported dashboards' uuids, so another dashboard's charts are
+# never candidates, and idempotent: a second run finds nothing and reports 0.
+# A chart whose DELETE the API refuses (422, still referenced) fails the run —
+# the predicate above says it cannot be.
+# 0 = nothing to prune, or every delete answered 200/204/404; 1 = a delete failed.
+# ------------------------------------------------------------
+prune_superseded_charts() { # LIST (uuid<TAB>title lines)
+  local list="${1:-}" uuids rows id name tok code body pruned=0 bad=0
+  [[ -n "$list" ]] || return 0
+  # Only uuid-shaped lines: a bundle file whose uuid could not be read must not
+  # turn into a SQL fragment.
+  uuids="$(printf '%s\n' "$list" | cut -f1 | tr 'A-Z' 'a-z' \
+           | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+           | sed "s/^/'/; s/\$/'/" | paste -sd, -)"
+  [[ -n "$uuids" ]] || return 0
+
+  rows="$(psql_q "$SUP_META_DB" "
+with targets as (select id from dashboards where lower(uuid::text) in ($uuids)),
+     placed as (
+       select distinct (e.v->'meta'->>'chartId')::int as slice_id
+         from dashboards d, jsonb_each(d.position_json::jsonb) as e(k, v)
+        where d.id in (select id from targets)
+          and e.v->>'type' = 'CHART'
+          and e.v->'meta'->>'chartId' ~ '^[0-9]+\$'),
+     named as (
+       select distinct (e.v->'meta'->>'chartId')::int as slice_id
+         from dashboards d, jsonb_each(d.position_json::jsonb) as e(k, v)
+        where e.v->>'type' = 'CHART'
+          and e.v->'meta'->>'chartId' ~ '^[0-9]+\$')
+select s.id || '|' || s.slice_name
+  from slices s
+ where not exists (select 1 from named n where n.slice_id = s.id)
+   and not exists (select 1 from dashboard_slices ds where ds.slice_id = s.id)
+   and exists (select 1 from slices t join placed p on p.slice_id = t.id
+                where t.slice_name = s.slice_name
+                  and t.datasource_id is not distinct from s.datasource_id)
+ order by s.id")"
+
+  if [[ -z "$rows" ]]; then
+    log "  pruned: 0 superseded chart(s) — every chart the import displaces is already gone"
+    return 0
+  fi
+  tok="$(superset_token)"
+  if [[ -z "$tok" ]]; then
+    warn "could not authenticate to Superset (admin/admin) — superseded charts NOT pruned"
+    return 1
+  fi
+  body="$(mktemp)"
+  while IFS='|' read -r id name; do
+    [[ -n "${id:-}" ]] || continue
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    code="$(curl -s --max-time 30 -o "$body" -w '%{http_code}' \
+        -X DELETE "$SUP_URL/api/v1/chart/$id" \
+        -H "Authorization: Bearer $tok" 2>/dev/null || echo 000)"
+    case "$code" in
+      200|204|404)
+        log "  pruned superseded chart '$name' (id=$id) — the imported layout places the same name on the same dataset"
+        pruned=$((pruned + 1)) ;;
+      *)
+        warn "prune superseded chart '$name' (id=$id) -> HTTP $code"
+        report_import_body "$body"
+        bad=1 ;;
+    esac
+  done <<<"$rows"
+  rm -f "$body"
+  log "  pruned: $pruned superseded chart(s)"
+  return $bad
+}
+
+# ------------------------------------------------------------
 verify_superset() { # 0 = the metaschema passes the gate's own dashboard assertions
   local n_dash n_charts n_null_ds n_null_qc per dead bad=0
   n_dash="$(psql_q "$SUP_META_DB" 'select count(*) from dashboards')"
@@ -552,6 +829,28 @@ verify_superset() { # 0 = the metaschema passes the gate's own dashboard asserti
     warn "  first 8: ${dead:-?}"
     bad=1
   fi
+
+  # A dataset's column list is a snapshot taken at registration, and the marts are
+  # CTAS-built on every dbt run — so a mart that gained or renamed a column leaves
+  # its dataset stale, and charts on it 400 in the BROWSER while datasource_id,
+  # query_context and every API call above still look perfect.
+  local md_out md_rc md_script="${INSTALL_DIR}/superset/verify_dataset_metadata.sh"
+  if [[ -f "$md_script" ]]; then
+    if md_out="$(bash "$md_script" 2>&1)"; then md_rc=0; else md_rc=$?; fi
+    printf '%s\n' "$md_out" | sed 's/^/        /'
+    if [[ "$md_rc" -eq 0 ]]; then
+      log "dataset column metadata matches the EDW"
+    else
+      warn "dataset column metadata is STALE (gate exit $md_rc) — those tiles render"
+      warn "  'Unexpected error' in the browser while their API answers 200. Heal with:"
+      warn "    docker compose -f superset/compose.yaml up -d --force-recreate superset-setup"
+      bad=1
+    fi
+  else
+    warn "superset/verify_dataset_metadata.sh is missing — the stale-dataset check"
+    warn "  did NOT run; re-run from a complete checkout of ${INSTALL_DIR}"
+    bad=1
+  fi
   return $bad
 }
 
@@ -560,8 +859,9 @@ verify_superset() { # 0 = the metaschema passes the gate's own dashboard asserti
 # 1 = the import ran and left Superset incomplete.
 # ------------------------------------------------------------
 superset_dashboards() {
-  local zip rc=0
+  local zip rc=0 imported=0 dash_pairs=""
   [[ -n "$DASH_DIR" ]] || DASH_DIR="${INSTALL_DIR}/superset/dashboards"
+  [[ -n "$RETIRED_LIST" ]] || RETIRED_LIST="${DASH_DIR}/retired_dashboards.txt"
   if ! compgen -G "$DASH_DIR/*.zip" >/dev/null 2>&1; then
     log "no bundled dashboards — nothing to import"
     return 0
@@ -586,11 +886,29 @@ superset_dashboards() {
     warn "    bash ${INSTALL_DIR}/install.sh --dashboards-only"
     return 0
   fi
-  import_dashboards || rc=1
+  import_dashboards && imported=1 || rc=1
   for zip in "$DASH_DIR"/*.zip; do
     [[ -f "$zip" ]] || continue
     check_zip_landed "$zip" || rc=1
+    dash_pairs+="$(zipquery "$zip" uuids:dashboards)"$'\n'
   done
+  # The import is additive, so a dashboard the bundle no longer ships has to be
+  # retired explicitly — see retire_dashboards() and retired_dashboards.txt.
+  retire_dashboards "$RETIRED_LIST" || rc=1
+  # ...and so are its chart LINKS: the importer never removes a dashboard_slices
+  # row, and a linked-but-unplaced chart still renders as a tile. Only worth
+  # doing when this run's import actually landed the layouts being reconciled.
+  if [[ "$imported" == "1" ]]; then
+    reconcile_dashboard_links "$dash_pairs" || rc=1
+    # ...and neither is a chart ROW the import displaced. A chart has no slug to
+    # converge on — import_chart() matches by uuid alone — so the generation the
+    # scripted seed built before the import is a second row per chart name next
+    # to the one the layout now places. The layout's is the one that stands for a
+    # dashboard the bundle ships, so the one it displaced is deleted here; see
+    # prune_superseded_charts() for the predicate and why it cannot touch a chart
+    # another dashboard uses.
+    prune_superseded_charts "$dash_pairs" || rc=1
+  fi
   verify_superset || rc=1
   return $rc
 }
@@ -750,7 +1068,20 @@ main() {
     -e "s|YOUR_INSTALL_DIR|${INSTALL_DIR}|g" \
     -e "s|YOUR_CONF_DIR|${CONF_DIR}|g" \
     -e "s|YOUR_TIMEZONE|${TZ_VAL}|g" \
+    -e "s|YOUR_HOSTNAME|$(hostname -s 2>/dev/null || echo localhost)|g" \
     global.env
+
+  # The five secrets too — global-env-sync.py pushes every variable global.env
+  # defines into each service .env, so a secret left at its shipped default in
+  # global.env OVERWRITES the per-host value fill_env just generated.  That is
+  # how the published defaults of b18088e came to be live on every host
+  # (t_35b04ad9).  patch_global_secret replaces a shipped default only, so a
+  # re-run against a live instance keeps that host's values.
+  patch_global_secret AIRFLOW_SECRET_KEY  "$SHARED_SECRET"
+  patch_global_secret AIRFLOW_JWT_SECRET  "$SHARED_SECRET"
+  patch_global_secret SUPERSET_SECRET_KEY "$SHARED_SECRET"
+  patch_global_secret AIRFLOW_FERNET_KEY  "$FERNET_KEY"
+  patch_global_secret ENCRYPTION_KEY      "$DOCKHAND_KEY"
 
   # --- Sync global env vars ------------------------------------------------
   # global-env-sync.py reads global.env and pushes every variable it defines

@@ -303,16 +303,38 @@ def get_or_create_grocery_datasets(token, db_id):
             r = requests.post(f"{BASE}/api/v1/dataset/", headers=h(token), json=payload)
             if r.status_code in (200, 201):
                 ds_id = r.json()["id"]
-                if dttm_col:
-                    requests.put(
-                        f"{BASE}/api/v1/dataset/{ds_id}",
-                        headers=h(token),
-                        json={"main_dttm_col": dttm_col},
-                    )
                 datasets[table_name] = ds_id
                 print(f"  Created dataset grocery/{schema}.{table_name} (id={ds_id})")
             else:
                 print(f"  WARNING: could not create grocery/{schema}.{table_name}: {r.text}")
+
+    # Re-sync each dataset's column list from the physical table BEFORE anything
+    # (main_dttm_col, a chart, a query_context) points at a column. A dataset's
+    # columns are a snapshot taken at registration and the marts are CTAS-built on
+    # every dbt run, so a dataset can be missing a column that exists today —
+    # mart_hourly_sales_pattern gaining `as_of_date` is the real case. Stale
+    # metadata is invisible to the API (the chart still answers 200) and breaks the
+    # tile in the browser only. Also required for ordering: Superset validates
+    # main_dttm_col against the dataset's columns, so setting it before the refresh
+    # fails on a dataset that has not seen the column yet.
+    from _superset_dataset_metadata import refresh_datasets
+    refresh_datasets(token, BASE, datasets)
+
+    # Set the date columns last, and for existing datasets too — a reseed re-asserts
+    # main_dttm_col, so an instance that lost it is healed rather than left to render
+    # "Datetime column not provided".
+    for table_name, schema, dttm_col in GROCERY_MART_TABLES:
+        ds_id = datasets.get(table_name)
+        if not dttm_col or not ds_id:
+            continue
+        r = requests.put(
+            f"{BASE}/api/v1/dataset/{ds_id}",
+            headers=h(token),
+            json={"main_dttm_col": dttm_col},
+        )
+        if r.status_code != 200:
+            print(f"  WARNING: could not set main_dttm_col='{dttm_col}' on "
+                  f"grocery/{schema}.{table_name} (id={ds_id}): {r.text[:120]}")
     return datasets
 
 
@@ -460,53 +482,145 @@ def get_or_create_grocery_charts(token, datasets):
 
 # ── Grocery dashboard ─────────────────────────────────────────────────────────
 
-def get_or_create_grocery_dashboard(token, charts):
-    TITLE = "Grocery Overview"
+GROCERY_OVERVIEW_TITLE = "Grocery Overview"
+# This seed's identity for its own dashboard is the SLUG, not the title.
+#
+# The bundled export ships a dashboard with the same title
+# (`Grocery_Overview_4.yaml`, `slug: null`) and Superset's importer resolves an
+# imported dashboard by uuid first, then by the model's unique constraint — for
+# `dashboards` that is `slug`. A null slug is nothing to match on, so every
+# import created a SECOND "Grocery Overview" next to this seed's row (plus a
+# parallel generation of its 8 charts), and the title lookup below returned
+# whichever row came first while `link_charts_to_dashboard()` REPLACES
+# `dashboard.slices` — two owners overwriting each other's links on every run.
+# That is fixed from both sides (t_23a97d10): the bundled copy is retired
+# (`superset/dashboards/retired_dashboards.txt`) and this seed addresses its row
+# by slug, so it can never adopt a dashboard that is not its own.
+GROCERY_OVERVIEW_SLUG = "grocery-overview"
 
+# (chart name, width, height) — the dashboard's tiles, in order. EVERY chart the
+# seed creates is here on purpose: a chart that is linked but not placed in the
+# layout is still DRAWN by the frontend as an extra tile, so the links and the
+# layout have to agree exactly (the shell asserts the same invariant for the
+# bundled dashboards: install.sh's reconcile_dashboard_links()).
+GROCERY_OVERVIEW_LAYOUT = [
+    ("Grocery Total Revenue",                 3, 60),
+    ("Grocery Loyalty Attach Rate",           3, 60),
+    ("Grocery Revenue by Location",           6, 60),
+    ("Grocery Daily Revenue Trend",           8, 80),
+    ("Grocery Revenue by Department",         4, 80),
+    ("Grocery Top Product Categories",        6, 80),
+    ("Grocery Coupon vs Deal Savings",        6, 80),
+    ("Grocery Avg Daily Revenue by Location", 12, 60),
+]
+
+
+def _list_dashboards(token):
     r = requests.get(
         f"{BASE}/api/v1/dashboard/",
         headers=h(token),
         params={"q": json.dumps({"page_size": 100})},
     )
     r.raise_for_status()
-    for d in r.json().get("result", []):
-        if d["dashboard_title"] == TITLE:
-            print(f"  Dashboard '{TITLE}' already exists (id={d['id']})")
-            return d["id"]
+    return r.json().get("result", [])
 
-    # Row 1: Total Revenue (3) | Loyalty Rate (3) | Revenue by Location (6)
-    # Row 2: Daily Revenue Trend (8) | Revenue by Department (4)
-    # Row 3: Top Product Categories (6) | Coupon vs Deal Savings (6)
-    layout = [
-        [
-            (charts.get("Grocery Total Revenue", 0),        "Grocery Total Revenue",        3, 60),
-            (charts.get("Grocery Loyalty Attach Rate", 0),  "Grocery Loyalty Attach Rate",  3, 60),
-            (charts.get("Grocery Revenue by Location", 0),  "Grocery Revenue by Location",  6, 60),
-        ],
-        [
-            (charts.get("Grocery Daily Revenue Trend", 0),  "Grocery Daily Revenue Trend",  8, 80),
-            (charts.get("Grocery Revenue by Department", 0),"Grocery Revenue by Department",4, 80),
-        ],
-        [
-            (charts.get("Grocery Top Product Categories", 0), "Grocery Top Product Categories", 6, 80),
-            (charts.get("Grocery Coupon vs Deal Savings", 0), "Grocery Coupon vs Deal Savings", 6, 80),
-        ],
-    ]
 
-    position_json = json.dumps(build_position(layout))
+def _placed_chart_ids(dashboard):
+    """The chart ids a dashboard's position_json places."""
+    try:
+        position = json.loads(dashboard.get("position_json") or "{}")
+    except (TypeError, ValueError):
+        return set()
+    ids = set()
+    for node in position.values():
+        if isinstance(node, dict) and node.get("type") == "CHART":
+            cid = (node.get("meta") or {}).get("chartId")
+            if isinstance(cid, int):
+                ids.add(cid)
+    return ids
 
-    r = requests.post(f"{BASE}/api/v1/dashboard/", headers=h(token), json={
-        "dashboard_title": TITLE,
-        "position_json": position_json,
+
+def _overview_rows(charts):
+    """[(chart_id, name, width, height), ...] per row, for the charts we have."""
+    rows, current, used = [], [], 0
+    for name, width, height in GROCERY_OVERVIEW_LAYOUT:
+        cid = charts.get(name)
+        if not cid:
+            print(f"  WARNING: chart '{name}' is missing — left out of the layout")
+            continue
+        if used + width > 12:
+            rows.append(current)
+            current, used = [], 0
+        current.append((cid, name, width, height))
+        used += width
+    if current:
+        rows.append(current)
+    return rows
+
+
+def get_or_create_grocery_dashboard(token, charts):
+    """
+    Resolve THIS seed's Grocery Overview and re-assert its layout.
+
+    Returns (dashboard id, the chart ids its layout places), or None when the
+    dashboard it finds is not this seed's to rewrite: a same-titled row that
+    places none of this run's charts is left exactly as it is — its layout and
+    its links are not touched, because the chart generation a row places is the
+    only way to tell a legacy row of our own from the bundle's copy.
+    """
+    dashes = _list_dashboards(token)
+    chart_ids = set(charts.values())
+
+    mine = [d for d in dashes if (d.get("slug") or "") == GROCERY_OVERVIEW_SLUG]
+    if not mine:
+        # No row carries the slug yet. Adopt this seed's legacy row (created
+        # before it stamped one) — provably ours only when its layout places the
+        # charts we are about to bind.
+        titled = [d for d in dashes
+                  if d.get("dashboard_title") == GROCERY_OVERVIEW_TITLE]
+        mine = [d for d in titled if _placed_chart_ids(d) & chart_ids]
+        if not mine and titled:
+            print(f"  WARNING: dashboard {titled[0]['id']} is titled "
+                  f"'{GROCERY_OVERVIEW_TITLE}' but places none of this run's charts "
+                  f"— not this seed's row; leaving its layout and links alone")
+            return None
+
+    rows = _overview_rows(charts)
+    if not rows:
+        print("  WARNING: no charts available — the Grocery Overview was not touched")
+        return None
+    layout_ids = [cid for row in rows for cid, _n, _w, _h in row]
+    payload = {
+        "dashboard_title": GROCERY_OVERVIEW_TITLE,
+        "slug": GROCERY_OVERVIEW_SLUG,
         "published": True,
-    })
+        "position_json": json.dumps(build_position(rows)),
+    }
+
+    if mine:
+        dash = sorted(mine, key=lambda d: d["id"])[0]
+        if len(mine) > 1:
+            print(f"  WARNING: {len(mine)} dashboards titled "
+                  f"'{GROCERY_OVERVIEW_TITLE}' — using id={dash['id']} (lowest id)")
+        r = requests.put(
+            f"{BASE}/api/v1/dashboard/{dash['id']}", headers=h(token), json=payload
+        )
+        if r.status_code not in (200, 201):
+            print(f"  WARNING: could not re-assert dashboard {dash['id']} "
+                  f"('{GROCERY_OVERVIEW_TITLE}'): {r.status_code} {r.text[:200]}")
+            return None
+        print(f"  Dashboard '{GROCERY_OVERVIEW_TITLE}' exists (id={dash['id']}) — "
+              f"slug={GROCERY_OVERVIEW_SLUG}, layout re-asserted")
+        return dash["id"], layout_ids
+
+    r = requests.post(f"{BASE}/api/v1/dashboard/", headers=h(token), json=payload)
     if r.status_code not in (200, 201):
         print(f"  WARNING: could not create dashboard: {r.text}")
         return None
-
     dash_id = r.json()["id"]
-    print(f"  Created dashboard '{TITLE}' (id={dash_id})")
-    return dash_id
+    print(f"  Created dashboard '{GROCERY_OVERVIEW_TITLE}' "
+          f"(id={dash_id}, slug={GROCERY_OVERVIEW_SLUG})")
+    return dash_id, layout_ids
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -530,9 +644,13 @@ def main():
         gr_charts = get_or_create_grocery_charts(token, gr_datasets)
 
         print("Setting up dashboard...")
-        gr_dash_id = get_or_create_grocery_dashboard(token, gr_charts)
-        if gr_dash_id:
-            link_charts_to_dashboard(gr_dash_id, list(gr_charts.values()))
+        overview = get_or_create_grocery_dashboard(token, gr_charts)
+        if overview:
+            ov_id, ov_chart_ids = overview
+            # Link exactly the charts the layout places: a linked-but-unplaced
+            # chart is still drawn as an extra tile, and this call REPLACES the
+            # dashboard's links, so "what the layout says" is the whole contract.
+            link_charts_to_dashboard(ov_id, ov_chart_ids)
     else:
         print("WARNING: no grocery datasets created, skipping charts/dashboard.")
 

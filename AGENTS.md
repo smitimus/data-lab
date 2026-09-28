@@ -1,5 +1,19 @@
 # AGENTS.md — Data Lab Analytics Stack
 
+## Git & push policy
+
+- **Gitea is the source of truth, and pushing to it is automatic.** `origin` is
+  `https://<gitea-host>/admin/data-lab.git`; commit and `git push origin main` without
+  asking. A **slot's** `/opt/data-lab` has no credential at all — it is a deployment target, moved
+  by `infra/scripts/refresh-slot-tree.sh`, never pushed from.
+- **The GitHub mirror (`smitimus/data-lab`) is never pushed from here.** It is published only by
+  `infra/scripts/mirror-push.sh data-lab --publish-github`, which needs an explicit approval in the
+  session that runs it. A plain run of that script publishes Gitea and *reports* what the mirror is
+  missing; `--pending` is the read-only queue and exits 1 while commits are waiting.
+- **Git identity is not global** — every commit needs
+  `-c user.email="smity@bridgebum.net" -c user.name="smitimus"`, or the commit lands as
+  `root@<docker-host>` and links to no avatar.
+
 ## Directory Layout
 
 | Path | Purpose |

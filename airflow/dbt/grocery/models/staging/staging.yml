@@ -174,6 +174,31 @@ models:
         tests: [not_null]
       - name: line_total
         tests: [not_null]
+      # Promotion attribution (t_f0bdffaf). Both were exposed as `null::text`
+      # until the promo validity windows upstream covered their own usage
+      # (t_01b4fe4f). The FK tests are soft on purpose: raw_pos.coupons and
+      # raw_pos.combo_deals are read from `active_only` API routes
+      # (SOURCE_PARTIAL in grocery_ingest_api), so a promo that is deactivated
+      # after it was used legitimately stops being loaded while the items that
+      # reference it stay — a real gap in the source snapshot, not a defect in
+      # this model. The hard assertion on these columns is the date rule
+      # (tests/assert_coupon_dates_valid.sql, assert_deal_dates_valid.sql).
+      - name: coupon_id
+        description: "Coupon the line was discounted by (raw_pos.transaction_items.coupon_id); null when no coupon applied."
+        tests:
+          - relationships:
+              to: ref('stg_pos_coupons')
+              field: coupon_id
+              config:
+                severity: warn
+      - name: deal_id
+        description: "Combo deal the line was discounted by (raw_pos.transaction_items.deal_id); null when no deal applied."
+        tests:
+          - relationships:
+              to: ref('stg_pos_combo_deals')
+              field: deal_id
+              config:
+                severity: warn
     data_tests:
       - dbt_expectations.expect_table_row_count_to_be_between:
           min_value: 500000
@@ -288,6 +313,16 @@ models:
       - name: quantity
         tests: [not_null]
 
+  # Error-severity on purpose. `grocery_ingest_api` reads
+  # `/grocery/online/order-events` *before* `/grocery/online/orders`
+  # (REFERENCING_ROUTES in the ingest DAG), and the orders route's window ends at
+  # the instant the events route's window ends — one instant, both sides
+  # (`cut_from` + AS_OF_ROUTES, t_7e427ee6/t_5a16129f). Every event's parent order
+  # is therefore inside the orders window by construction, not by an accident of
+  # scheduling. A missing parent here is a real defect; do not add a tolerance
+  # without removing that read order first. t_7e427ee6: reading them the other way
+  # round failed a fresh seed with 10 events at 20:04:13.717 whose orders the
+  # window had already closed over.
   - name: stg_online_order_events
     columns:
       - name: event_id

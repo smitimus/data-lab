@@ -1,13 +1,22 @@
 -- Coupon + combo deal redemption analysis against real POS data.
 -- Grain: one row per promotion (coupon_id or deal_id).
 --
--- Updated (data-lab#47 / Verisim#14): per-promotion attribution now works via
--- stg_pos_transaction_items.coupon_id / deal_id. When those columns are populated,
--- true per-promotion redemption COUNT and SAVINGS are computed from item-level
--- joins. When NULL (old data seeded pre-fix), falls back to catalog uses_count.
+-- Per-promotion attribution (data-lab#47 / Verisim#14, live since t_f0bdffaf):
+-- stg_pos_transaction_items.coupon_id / deal_id are populated, so the
+-- attributed_* columns below are true per-promotion counts and totals from
+-- item-level joins rather than the type-level fallback. The cross-joined
+-- coupon_txn_count / coupon_total_savings / combo_* pair is kept as the
+-- promotion-TYPE total across all promotions, which is what a cross-promotion
+-- comparison needs; it does not depend on the ids being null.
 --
--- POS-aggregated savings (coupon_total_savings, combo_total_savings) remain
--- available as type-level cross-joined constants for backward compat.
+-- The two families are NOT comparable term-for-term, and that is the source's
+-- definition, not a defect here: has_coupon / has_deal are exactly
+-- `coupon_savings > 0` / `deal_savings > 0` on the transaction, while
+-- attributed_txn_count counts transactions carrying a promo-TAGGED LINE.
+-- Measured at t_f0bdffaf: coupons 12,802 flagged vs 8,961 attributed; deals
+-- 1,909 flagged vs 9,529 attributed — the deal gap runs the other way because
+-- deal_id tags participating lines whether or not the combo condition was met
+-- and savings applied.
 
 {{
     config(
@@ -43,7 +52,7 @@ txns as (
     from {{ ref('stg_pos_transactions') }}
 ),
 
--- Per-coupon redemption from txn_items (when coupon_id is populated)
+-- Per-coupon redemption from txn_items (populated since t_f0bdffaf)
 coupon_item_agg as (
     select
         ti.coupon_id,
@@ -55,7 +64,7 @@ coupon_item_agg as (
     group by ti.coupon_id
 ),
 
--- Per-deal redemption from txn_items (when deal_id is populated)
+-- Per-deal redemption from txn_items (populated since t_f0bdffaf)
 deal_item_agg as (
     select
         ti.deal_id,
@@ -67,7 +76,9 @@ deal_item_agg as (
     group by ti.deal_id
 ),
 
--- Type-level fallback (for rows where coupon_id/deal_id is NULL)
+-- Promotion-TYPE totals, across every promotion of that type (see the header:
+-- this is a cross-promotion constant, not the per-promotion fallback it used to
+-- be read as when the ids were null)
 coupon_txn_agg as (
     select
         count(*) filter (where has_coupon)   as coupon_txn_count,

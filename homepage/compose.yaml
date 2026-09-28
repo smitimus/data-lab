@@ -17,7 +17,15 @@ services:
       - TZ=${TZ}
       # 260831: also allow localhost — host validation 400'd on http://localhost/
       # (only ${IP} was allowed); users on this box reach the dashboard by that name.
-      - HOMEPAGE_ALLOWED_HOSTS=${IP},localhost
+      # 260924: and the slot's own short name (dev / test). Homepage matches the WHOLE
+      # Host header by exact string equality, port included; `localhost:3000`,
+      # `127.0.0.1:3000` and `[::1]:3000` are always allowed, everything else must be
+      # listed verbatim, and the list is split on "," WITHOUT trimming — so a space
+      # after a comma silently stops that entry from ever matching. After the subnet
+      # move every .env still held the old address, so dev and test served "Host
+      # validation failed" to every LAN browser while the localhost health probe kept
+      # reporting UP. ${HOMEPAGE_ALLOWED_HOSTNAMES} is per-slot, like ${IP}.
+      - HOMEPAGE_ALLOWED_HOSTS=${IP},localhost,${HOMEPAGE_ALLOWED_HOSTNAMES}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000 > /dev/null 2>&1"]
       interval: 30s

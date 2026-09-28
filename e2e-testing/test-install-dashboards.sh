@@ -16,13 +16,17 @@
 #   3. report per object — every bundled dashboard/chart/dataset present or
 #      MISSING, plus the gate's own two assertions (datasource_id,
 #      query_context) — and let the verdict decide the exit status of
-#      `--dashboards-only`.
+#      `--dashboards-only`;
+#   4. assert the REAL bundle in the repo — not just the synthetic fixture —
+#      carries no pie / big_number chart with only the plural `metrics`; that
+#      shape renders "Unexpected error" forever, invisibly to every API and DB
+#      gate, and a re-exported bundle must not be able to re-introduce it.
 #
-# The bundle is synthetic but built with the real bundle's shape and counts
-# (3 dashboards, 18 charts, 8 mart datasets, 1 database) and the same
-# directory/field layout the Superset importer and the report both need:
-# databases/, datasets/<db>/, charts/, dashboards/, metadata.yaml, `uuid:`,
-# `table_name:`, `schema:`, `slice_name:`, `dashboard_title:`.
+# The bundle is synthetic but built with the real bundle's shape (dashboards/,
+# charts/, datasets/<db>/, databases/, metadata.yaml, `uuid:`, `table_name:`,
+# `schema:`, `slice_name:`, `dashboard_title:` — the real counts are not asserted
+# here), and in the directory/field layout the Superset importer and the report
+# both need.
 #
 #   bash e2e-testing/test-install-dashboards.sh
 #   INSTALL_SH=/path/to/install.sh bash e2e-testing/test-install-dashboards.sh
@@ -38,6 +42,14 @@ mkdir -p "$WORK/tree/superset/dashboards" "$WORK/empty/superset/dashboards"
 ZIP="$WORK/tree/superset/dashboards/verisim_grocery_dashboards.zip"
 export STUB_ZIP="$ZIP"
 export STUB_IMPORT_LOG="$WORK/import-calls.jsonl"
+# The stub's Superset state: which dashboards show a stale/duplicated link set.
+# Reset before a case that must start from a broken instance; left alone to prove
+# that a second --dashboards-only is a no-op.
+STATE="$WORK/link-state"
+export STUB_LINK_STATE="$STATE"
+# The chart rows a previous seed generation left behind, which install.sh prunes
+# after the reconcile: the stub reports them once, then not again.
+export STUB_PRUNE_STATE="$WORK/prune-state"
 export PATH="$H/bin-dashboards:$PATH"
 
 [ -f "$SRC" ] || { echo "install.sh not found at $SRC"; exit 1; }
@@ -115,49 +127,23 @@ python3 "$WORK/mkbundle.py" "$ZIP"
 [ -f "$ZIP" ] && ok "fixture bundle exists" || bad "fixture bundle missing"
 chmod +x "$H/bin-dashboards/docker" "$H/bin-dashboards/curl"
 
-echo
-echo "== the chart copy is derived with the stdlib only (a guest has no PyYAML) =="
-# Pull the shipped snippet out of install.sh and run it under `python3 -S`, which
-# disables site-packages — that is the bare Debian guest the deploy runs on, where
-# `import yaml` fails. The chart refresh silently did nothing there until the
-# derivation was rewritten against re/zipfile (found on dev 106, 2026-09-21).
-sed -n "/^bundle_charts_zip()/,/^}/p" "$SRC" \
-  | sed -n "/<<'PY'/,/^PY\$/p" | sed '1d;$d' > "$WORK/derive.py"
-if [ -s "$WORK/derive.py" ]; then
-  ok "extracted bundle_charts_zip() body ($(wc -l < "$WORK/derive.py") lines)"
-else
-  bad "could not extract bundle_charts_zip() from install.sh"
-fi
-rm -f "$WORK/charts-noyaml.zip"
-if python3 -S - "$ZIP" "$WORK/charts-noyaml.zip" < "$WORK/derive.py" >/dev/null 2>"$WORK/derive.err"; then
-  ok "the derivation runs under python3 -S (no site-packages)"
-else
-  bad "the derivation needs a module a guest does not have: $(tr '\n' ' ' < "$WORK/derive.err" | head -c 200)"
-fi
-DERIVED="$(python3 - "$WORK/charts-noyaml.zip" <<'PY' 2>/dev/null || true
-import re
-import sys
-import zipfile
-
-with zipfile.ZipFile(sys.argv[1]) as z:
-    names = z.namelist()
-    meta = [n for n in names if n.endswith("metadata.yaml")][0]
-    print("type=%s dashboards=%d charts=%d datasets=%d"
-          % (re.search(r"(?m)^type:\s*(\S+)", z.read(meta).decode()).group(1),
-             sum(1 for n in names if "/dashboards/" in n),
-             sum(1 for n in names if "/charts/" in n),
-             sum(1 for n in names if "/datasets/" in n)))
-PY
-)"
-contains "the derived chart copy" "$DERIVED" "type=Slice"
-contains "the derived chart copy" "$DERIVED" "dashboards=0"
-contains "the derived chart copy" "$DERIVED" "charts=18"
+# verify_superset() also runs superset/verify_dataset_metadata.sh, a live-EDW
+# check this off-host fixture cannot satisfy. Stub it so the gate's dataset
+# branch is exercised by the script's presence and exit code — without it the
+# case reports the missing-script warning, which is not what is under test here.
+mkdir -p "$WORK/tree/superset"
+printf '#!/usr/bin/env bash\necho "  (stub) dataset column metadata check"\nexit 0\n' \
+  > "$WORK/tree/superset/verify_dataset_metadata.sh"
+chmod +x "$WORK/tree/superset/verify_dataset_metadata.sh"
 
 run_case() { # name expected_rc install_dir [extra VAR=VAL ...]
   local name="$1" want="$2" dir="$3"
   shift 3
   local scenario="$name"
-  case "$name" in *-lenient) scenario="${name%-lenient}" ;; esac
+  case "$name" in
+    *-lenient)   scenario="${name%-lenient}" ;;
+    clean-again) scenario="clean" ;;        # same instance, second run
+  esac
   local out rc
   out="$(env STUB_SCENARIO="$scenario" STUB_ZIP="$ZIP" STUB_IMPORT_LOG="$STUB_IMPORT_LOG" \
         DASH_WAIT=0 INSTALL_DIR="$dir" "$@" bash "$SRC" --dashboards-only 2>&1)"
@@ -171,6 +157,7 @@ run_case() { # name expected_rc install_dir [extra VAR=VAL ...]
 
 echo
 echo "== marts present, import complete: exit 0, every object accounted for =="
+rm -f "$STATE"
 run_case clean 0 "$WORK/tree"
 contains clean "$CASE_OUT" "marts ready:"
 contains clean "$CASE_OUT" "imported verisim_grocery_dashboards.zip (HTTP 200, overwrite=true)"
@@ -178,10 +165,57 @@ contains clean "$CASE_OUT" "3/3 dashboards present in Superset"
 contains clean "$CASE_OUT" "18/18 charts present in Superset"
 contains clean "$CASE_OUT" "8/8 datasets present in Superset"
 contains clean "$CASE_OUT" "every chart has a query_context"
-contains clean "$CASE_OUT" "refreshed verisim_grocery_dashboards.zip charts"
 contains clean "$CASE_OUT" "dashboards: 14 (>= 11)"
 contains clean "$CASE_OUT" "per dashboard:"
 contains clean "$CASE_OUT" "dashboards-only complete."
+
+echo
+echo "== the import leaves the link sets stale and the gate reconciles them =="
+contains clean "$CASE_OUT" 'dashboard 20 "Verisim Overview 1": 8 tile link(s) for 8 layout slot(s) (was 16)'
+contains clean "$CASE_OUT" 'dashboard 21 "Verisim Overview 2": 6 tile link(s) for 6 layout slot(s)'
+contains clean "$CASE_OUT" 'dashboard 22 "Verisim Overview 3": 4 tile link(s) for 4 layout slot(s) (was 3)'
+contains clean "$CASE_OUT" "reconciled: 8 orphan link(s) unlinked, 1 missing link(s) linked"
+
+echo
+echo "== ...and the chart rows the import displaced are deleted, not left dead =="
+# A chart converges by uuid only, so the generation a seed built before the
+# import is a second row per chart name next to the one the layout places. The
+# prune (prune_superseded_charts) deletes the ones no layout names and no
+# dashboard links; the fixture's rows 3 and 4 are the two it reports.
+contains clean "$CASE_OUT" "pruned: 2 superseded chart(s)"
+contains clean "$CASE_OUT" "pruned superseded chart 'Chart 01 Daily Revenue' (id=3)"
+contains clean "$CASE_OUT" "pruned superseded chart 'Chart 02 Location Performance' (id=4)"
+
+echo
+echo "== ...and a second run is a no-op (the links already match the layouts) =="
+run_case clean-again 0 "$WORK/tree"
+contains clean-again "$CASE_OUT" "reconciled: 0 orphan link(s) unlinked, 0 missing link(s) linked"
+contains clean-again "$CASE_OUT" 'dashboard 20 "Verisim Overview 1": 8 tile link(s) for 8 layout slot(s)'
+absent clean-again "$CASE_OUT" "(was 16)"
+contains clean-again "$CASE_OUT" "pruned: 0 superseded chart(s)"
+absent clean-again "$CASE_OUT" "pruned superseded chart"
+
+echo
+echo "== the prune's own DELETE calls go to the chart API, one per row =="
+for needle in '"DELETE"' '"http://localhost:8088/api/v1/chart/3"' '"http://localhost:8088/api/v1/chart/4"' 'Bearer STUB.TOKEN'; do
+  if grep -qF -- "$needle" "$STUB_IMPORT_LOG"; then ok "prune call carries $needle"; else bad "prune call missing $needle"; fi
+done
+
+echo
+echo "== a delete the API refuses fails the run (a chart it still references) =="
+rm -f "$STATE" "$STUB_PRUNE_STATE"
+run_case prune422 1 "$WORK/tree"
+contains prune422 "$CASE_OUT" "prune superseded chart 'Chart 01 Daily Revenue' (id=3) -> HTTP 422"
+contains prune422 "$CASE_OUT" "Superset dashboards incomplete"
+absent prune422 "$CASE_OUT" "pruned: 2 superseded chart(s)"
+
+echo
+echo "== a layout slot with no chart behind it fails the run (a tile that cannot render) =="
+rm -f "$STATE"
+run_case dangling 1 "$WORK/tree"
+contains dangling "$CASE_OUT" "layout slot(s) name a chart that does not exist"
+contains dangling "$CASE_OUT" "those tiles cannot render"
+contains dangling "$CASE_OUT" "Superset dashboards incomplete"
 
 echo
 echo "== marts present, the bundle's own charts landed without query_context: exit 1, named =="
@@ -199,20 +233,13 @@ contains partial "$CASE_OUT" "MISSING:"
 
 echo
 echo "== import rejected (HTTP 422): exit 1, Superset's per-object error printed =="
+rm -f "$STATE"   # a broken instance is on hand, so "no reconcile line" means the gate
 run_case import422 1 "$WORK/tree"
 contains import422 "$CASE_OUT" "HTTP 422"
 contains import422 "$CASE_OUT" "was not passed"
 contains import422 "$CASE_OUT" "nothing was imported: the request is atomic"
 absent import422 "$CASE_OUT" "imported verisim_grocery_dashboards.zip"
-
-echo
-echo "== the chart refresh is rejected (HTTP 422): exit 1, charts left as they were =="
-run_case chart422 1 "$WORK/tree"
-contains chart422 "$CASE_OUT" "imported verisim_grocery_dashboards.zip (HTTP 200, overwrite=true)"
-contains chart422 "$CASE_OUT" "chart refresh for verisim_grocery_dashboards.zip -> HTTP 422"
-contains chart422 "$CASE_OUT" "charts kept their old query_context"
-contains chart422 "$CASE_OUT" "Chart already exists and \`overwrite=true\` was not passed"
-contains chart422 "$CASE_OUT" "Superset dashboards incomplete"
+absent import422 "$CASE_OUT" "reconciled:"   # nothing landed, so no layout was reconciled
 
 echo
 echo "== login refused: exit 1, nothing claimed as imported =="
@@ -263,17 +290,84 @@ for needle in 'formData=@' 'databases/Grocery.yaml' '"overwrite=true"' 'Bearer S
   if grep -qF -- "$needle" "$STUB_IMPORT_LOG"; then ok "import call carries $needle"; else bad "import call missing $needle"; fi
 done
 
-echo "== the bundle's charts are refreshed through the CHART importer =="
-if grep -qF '/api/v1/chart/import/' "$STUB_IMPORT_LOG"; then
-  ok "chart refresh posted to /api/v1/chart/import/ (the importer that honours overwrite)"
-else
-  bad "no chart refresh call — an existing chart would keep whatever query_context it had"
-fi
-
 echo
 echo "== install path still backgrounds the import behind the mart gate =="
 grep -qF 'superset_dashboards' "$SRC" && ok "main() calls superset_dashboards" || bad "main() does not gate on superset_dashboards"
 grep -qF 'wait_for_marts' "$SRC" && ok "the mart wait is present" || bad "no mart wait"
+
+echo
+echo "== the bundle the repo SHIPS: no pie/big_number chart without the singular metric =="
+# The fixture above is synthetic; this reads the real bundle install.sh would
+# import, through the stdlib-only gate in lib/bundle_metrics.py (a guest running
+# this suite has no PyYAML). See that file for why this shape is fatal: the tile
+# renders "Unexpected error" forever while every API and DB gate stays green.
+BUNDLE_DIR="$(cd "$H/.." && pwd)/superset/dashboards"
+BUNDLES=("$BUNDLE_DIR"/*.zip)
+if [ ! -e "${BUNDLES[0]}" ]; then
+  bad "no bundled dashboard zip found in $BUNDLE_DIR"
+else
+  for bundle in "${BUNDLES[@]}"; do
+    label="bundle $(basename "$bundle")"
+    OUT_BUNDLE="$(python3 "$H/lib/bundle_metrics.py" "$bundle" 2>&1)"; BUNDLE_RC=$?
+    printf '%s\n' "$OUT_BUNDLE" | sed 's/^/    /'
+    rc_is "$label: singular metric on every pie/big_number chart" "$BUNDLE_RC" 0
+  done
+fi
+
+echo
+echo "== ...and that gate fails on the shape it exists for (control) =="
+# A gate that only ever sees a clean bundle proves nothing: build the shape the
+# defect had (a pie whose params carry the plural metrics and no metric) and
+# require the gate to refuse it. Both controls are synthetic, 1 chart each.
+cat > "$WORK/mkchart.py" <<'PY'
+import sys, zipfile
+
+FLAVOURS = {
+    "plural": "  metrics:\n  - expressionType: SIMPLE\n    aggregate: SUM\n    label: SUM(quantity_on_hand)\n",
+    "singular": "  metric:\n    expressionType: SIMPLE\n    aggregate: SUM\n    label: SUM(quantity_on_hand)\n",
+    "null": "  metric: null\n  metrics:\n  - expressionType: SIMPLE\n    aggregate: SUM\n    label: SUM(quantity_on_hand)\n",
+}
+body = ("""slice_name: Stock Aging Breakdown
+viz_type: pie
+params:
+  datasource: 15__table
+  viz_type: pie
+  time_range: No filter
+  adhoc_filters: []
+%s  groupby:
+  - stock_aging_category
+  row_limit: 10
+query_context: '{"datasource": {"id": 15, "type": "table"}, "queries": []}'
+uuid: a25b3b1f-052a-420e-a7a4-06eeed88b5c3
+dataset_uuid: 19e463d2-35f2-460a-8ac1-b679678d2463
+""" % FLAVOURS[sys.argv[2]])
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("chart_export/charts/Stock_Aging_Breakdown_37.yaml", body)
+PY
+for flavour in plural null; do
+  python3 "$WORK/mkchart.py" "$WORK/gate-$flavour.zip" "$flavour"
+  OUT_GATE="$(python3 "$H/lib/bundle_metrics.py" "$WORK/gate-$flavour.zip" 2>&1)"; GATE_RC=$?
+  printf '%s\n' "$OUT_GATE" | sed 's/^/    /'
+  rc_is "gate refuses the $flavour shape" "$GATE_RC" 1
+  contains "gate names the $flavour offence" "$OUT_GATE" "VIOLATION"
+done
+python3 "$WORK/mkchart.py" "$WORK/gate-singular.zip" singular
+OUT_GATE="$(python3 "$H/lib/bundle_metrics.py" "$WORK/gate-singular.zip" 2>&1)"; GATE_RC=$?
+rc_is "gate accepts the singular shape" "$GATE_RC" 0
+absent "gate reports no offence for the singular shape" "$OUT_GATE" "VIOLATION"
+
+echo
+echo "== wiring: one rule, shared by the seed, the bundle repair and this gate =="
+ROOT="$(cd "$H/.." && pwd)"
+grep -qF 'prune_superseded_charts "$dash_pairs"' "$SRC" \
+  && ok "the install step prunes the chart rows an import displaced" \
+  || bad "install.sh never prunes a superseded chart generation"
+grep -qF '_superset_chart_params.py' "$ROOT/init.sh" \
+  && ok "init.sh copies the shared rule into _conf" || bad "init.sh does not copy the shared rule"
+grep -qF 'normalise_metric_params' "$ROOT/superset/create_grocery_ops_dashboard.py" \
+  && ok "the grocery-ops seed applies the rule" || bad "the seed normalises its charts inline"
+grep -qF 'normalise_metric_params' "$ROOT/superset/dashboards/normalise_chart_metrics.py" \
+  && ok "the offline bundle repair applies the rule" || bad "the bundle repair does not apply the rule"
 
 echo
 echo "test-install-dashboards.sh: $PASS passed, $FAIL failed"

@@ -75,34 +75,57 @@ Log out and back in for the group change to take effect.
 git clone https://github.com/smitimus/data-lab.git /opt/data-lab
 cd /opt/data-lab
 
-# Edit global.env — set YOUR_SERVER_IP and YOUR_INSTALL_DIR
+# Optional: pin the IP/paths by hand. generate-secrets.sh below detects both
+# (IP from the routing table, CONF/STACKS from the clone path) when they are
+# still YOUR_* placeholders.
 nano global.env
+
+# The homepage dashboard rejects Host headers it does not recognise, so its
+# extra hostnames must be substituted per host — generate-secrets.sh does not
+# cover this one (install.sh does). Use this machine's short name.
+sed -i "s|YOUR_HOSTNAME|$(hostname -s)|g" global.env
 
 # Generate .env files from templates
 for d in airflow postgres superset cloudbeaver homepage dbt-docs dockhand verisim-grocery; do
   cp $d/.env.example $d/.env
 done
 
-# Generate secrets and replace placeholders (or edit manually)
-FERNET=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-SECRET=$(openssl rand -base64 42)
-sed -i "s|GENERATE_ME_FERNET_KEY|${FERNET}|g" airflow/.env
-sed -i "s|GENERATE_ME_SECRET|${SECRET}|g" airflow/.env superset/.env
-sed -i "s|GENERATE_ME_ENCRYPTION_KEY|$(openssl rand -base64 32)|g" dockhand/.env
+# Docker group GID — Airflow mounts the docker socket and needs the numeric GID
 DGID=$(getent group docker | cut -d: -f3)
 sed -i "s|DETECT_ME_DOCKER_GID|${DGID}|g" airflow/.env
 
-python3 global-env-sync.py
+# Generate this host's secrets and propagate them to every service .env.
+# Same generator install.sh runs: it writes into global.env (the source of
+# truth) and then syncs, so the per-host values win over whatever the tree
+# ships. It replaces the GENERATE_ME_SECRET sentinels global.env carries; the
+# .env templates' own GENERATE_ME_* placeholders are overwritten by the sync
+# with those same values.
+#
+# global.env also ships two key-shaped defaults (AIRFLOW_FERNET_KEY,
+# ENCRYPTION_KEY) that it cannot express as a sentinel — they must be
+# well-formed keys or Airflow/Dockhand refuse to start. They work as-is and are
+# recognisable (`base64 -d` prints "data-lab-shipped-default-key-00N"); rotate
+# them deliberately before this instance stores credentials. See the Secrets
+# section of global.env.
+#
+# One of the three it does replace, SUPERSET_SECRET_KEY, decrypts data at rest
+# as well (Superset stores its connection passwords encrypted with it). On a
+# fresh clone that is free — nothing is stored yet. Re-running this script on an
+# instance that has already provisioned its connections is not: it warns, and
+# the stored ciphertext has to be re-encrypted under the new key
+# (`docker exec superset superset re-encrypt-secrets --previous_secret_key
+# <old>`). Same section of global.env.
+bash generate-secrets.sh
 ```
 
-### 4. Start
+### 3. Start
 
 ```bash
 bash init.sh
 bash start.sh
 ```
 
-### 5. Superset dashboards (bundled import)
+### 4. Superset dashboards (bundled import)
 
 `install.sh` imports the bundled dashboards in the background once Superset is
 healthy — but the bundle carries one Superset dataset per mart table, so the
@@ -176,6 +199,7 @@ bash start.sh              # start all stacks
 bash stop.sh               # stop all stacks
 bash init.sh               # reseed _conf/ (prompts to wipe)
 bash setup.sh              # adopt stacks in Dockhand (first-time)
+bash generate-secrets.sh   # generate per-host secrets (replaces global.env's shipped defaults)
 python3 global-env-sync.py # sync global.env changes to all .env files
 ```
 

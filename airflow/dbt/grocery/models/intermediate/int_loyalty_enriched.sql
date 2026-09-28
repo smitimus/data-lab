@@ -6,6 +6,19 @@
 -- Grain: one row per (member_id, activity_date, pt_id) -- an event grain.
 -- Source: stg_pos_loyalty_members, stg_pos_loyalty_point_transactions, stg_pos_transactions.
 --
+-- t_56298217: the point_txns join is an INNER join. It used to be a left join,
+-- which emitted one all-null row for every member with no point event (1684 of
+-- 54044 rows on the 2026-09-21 dev slot) -- rows that have no activity_date and
+-- contradict the event grain documented above. The defect was invisible because
+-- this model's schema entry was the block the marts.yml duplicate `data_tests`
+-- key silently dropped, so no test ran against it. Both consumers
+-- (mart_loyalty_rfm, mart_loyalty_engagement) build `activity` from this model
+-- but start from the member list and coalesce, so removing the padding rows is
+-- a no-op for them: verified per member over the same base table (max
+-- activity_date, count(distinct activity_date), sum(points_earned),
+-- sum(points_redeemed), count(*) filter (where tier_changed) -- 0 differences,
+-- snapshot_date unchanged).
+--
 -- RFM note: recency/frequency/monetary are computed in mart_loyalty_rfm by aggregating
 -- this event stream back up to member level.
 
@@ -45,7 +58,7 @@ joined as (
         t.transaction_date,
         t.total                                           as transaction_total
     from members m
-    left join point_txns pt on pt.member_id = m.member_id
+    join point_txns pt on pt.member_id = m.member_id
     left join transactions t on t.transaction_id = pt.transaction_id
 )
 

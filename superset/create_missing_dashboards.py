@@ -125,11 +125,16 @@ def _dataset_dttm_col(token, base_url, ds_id):
 
 
 def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
-    # Idempotent: reuse an existing chart with the same name (avoids duplicates on re-run).
-    existing = _find_chart_id(token, base_url, slice_name)
-    if existing:
-        print(f"  ~ Chart '{slice_name}' already exists (id={existing})")
-        return {"id": existing, "slice_name": slice_name}
+    # The payload is built BEFORE the existence check, because a chart this
+    # definition already owns is RE-ASSERTED over the existing row rather than
+    # returned untouched: a chart seeded before _superset_query_context existed
+    # (or imported from the bundle with `query_context: null`) is a zombie that
+    # renders "Chart has no query context saved. Please save the chart again.",
+    # and every reseed used to skip straight past it (t_fc196131, whose
+    # create_missing_dashboards.py half did not survive the CT106 refresh —
+    # re-landed here as t_8d37df71's disposition). Reuse is by NAME + DATASET: a
+    # same-named chart on ANOTHER dataset is not this definition's chart, and is
+    # neither adopted nor overwritten — see _find_chart_id().
     from _superset_query_context import build_query_context
     base_params = {
         "datasource": f"{ds_id}__table",
@@ -178,6 +183,32 @@ def create_chart(token, base_url, ds_id, slice_name, viz_type, params_extra):
         "query_context": build_query_context(ds_id, base_params, token, base_url),
         "dashboards": [],
     }
+    # Idempotent AND self-healing: reuse a chart this definition already owns (same
+    # name, same dataset) by re-asserting the payload over its OLDEST row, so a
+    # reseed repairs params/query_context in place instead of appending another copy
+    # or leaving a zombie chart it cannot see. A row on another dataset is never
+    # reached here: _find_chart_id() scopes the match (t_0f87aab9).
+    existing = _find_chart_id(token, base_url, slice_name, ds_id)
+    if existing:
+        # Never send `dashboards` on a PUT: the create payload carries [] for it,
+        # and PUTting that would silently UNLINK the chart from its dashboard (the
+        # "no chart definition associated with this component" failure).
+        update_payload = {k: v for k, v in payload.items() if k != "dashboards"}
+        resp = requests.put(
+            urljoin(base_url, f"/api/v1/chart/{existing}"),
+            headers=headers(token),
+            json=update_payload,
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            print(f"  ~ Chart '{slice_name}' already exists on dataset {ds_id} "
+                  f"(id={existing}) — params/query_context re-asserted")
+        else:
+            # The row is still usable as it stands (a stale chart renders), so the
+            # dashboard keeps the tile and the failure is operator-visible here.
+            print(f"  ✗ Re-assert failed '{slice_name}' (id={existing}): "
+                  f"{resp.status_code} {resp.text[:200]} — the existing chart is reused as-is")
+        return {"id": existing, "slice_name": slice_name}
     resp = requests.post(
         urljoin(base_url, "/api/v1/chart/"),
         headers=headers(token),
@@ -210,21 +241,67 @@ def _find_dataset_id(token, base_url, db_id, table_name, schema="mart"):
     return None
 
 
-def _find_chart_id(token, base_url, slice_name):
+def _find_chart_id(token, base_url, slice_name, ds_id):
+    """Existing chart id carrying this slice name ON THIS DATASET, or None.
+
+    Superset chart ids are instance-local, so charts are addressed by NAME — but a
+    name is not an identity. Three scripts ship a "Labor Cost % of Revenue": the
+    Grocery Operations seed and the bundle both build it on
+    `mart_store_weekly_summary`, the HR section below builds it on
+    `mart_employee_cost`, and the workforce section builds it on
+    `mart_labor_cost_by_department`. Adopting by name alone handed dashboard 3's
+    tile the STORE-WEEKLY chart grouped by location instead of the department mart
+    grouped by department its own definition declares (t_0f87aab9) — a tile no gate
+    can see is wrong, because it renders fine, from the wrong mart. So the dataset
+    the caller resolved is part of the lookup: a same-named chart on a DIFFERENT
+    dataset is reported and skipped, and the chart this definition asks for is
+    built (precedent: create_grocery_ops_dashboard.py's `_find_chart_ids()`).
+    """
+    ids = []
+    foreign = []
     try:
-        r = requests.get(
-            urljoin(base_url, "/api/v1/chart/"),
-            headers=headers(token),
-            params={"q": json.dumps({"page_size": 500})},
-            timeout=20,
-        )
-        if r.status_code == 200:
-            for c in r.json().get("result", []):
-                if c.get("slice_name") == slice_name:
-                    return c["id"]
-    except Exception:
-        pass
-    return None
+        page = 0
+        # The API caps an effective page at 100 rows whatever we ask for, so ask
+        # for exactly that and keep paging while a page comes back full. (A
+        # requested page_size of 500 returns the first 100 rows, which looks like
+        # "the last page" — that hid every chart past the 100th and made a re-run
+        # append a duplicate row instead of reusing the one it could not see.)
+        page_size = 100
+        while True:
+            r = requests.get(
+                urljoin(base_url, "/api/v1/chart/"),
+                headers=headers(token),
+                # Filter server-side by name: instances accumulate several hundred
+                # charts, and a plain page walk can miss the row we need.
+                params={"q": json.dumps({
+                    "filters": [{"col": "slice_name", "opr": "eq", "value": slice_name}],
+                    "page": page,
+                    "page_size": page_size,
+                })},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                print(f"  ⚠ Chart lookup for '{slice_name}' failed: "
+                      f"{r.status_code} {r.text[:200]}")
+                break
+            batch = r.json().get("result", [])
+            for c in batch:
+                if c.get("datasource_id") != ds_id:
+                    foreign.append((c["id"], c.get("datasource_id")))
+                    continue
+                ids.append(c["id"])
+            if len(batch) < page_size or page >= 20:
+                break
+            page += 1
+    except Exception as e:  # network/JSON problems must not kill the seed
+        print(f"  ⚠ Chart lookup for '{slice_name}' raised: {e}")
+    if foreign:
+        print(f"  ℹ '{slice_name}' also exists on other datasets "
+              f"{sorted(set(d for _, d in foreign))} — not adopted, this "
+              f"definition asks for dataset {ds_id}")
+    # Oldest first, like the Grocery Operations seed: the row a first seed run
+    # created is the one a later run should extend, not the newest duplicate.
+    return min(ids) if ids else None
 
 
 def create_dashboard(token, base_url, chart_ids, title, slug):
@@ -406,18 +483,28 @@ def main():
         if ds_id:
             ds[table] = ds_id
 
-    # Also fetch existing IDs for tables we'll build charts on
-    list_resp = requests.get(
-        urljoin(args.superset_url, "/api/v1/dataset/"),
-        headers=headers(token),
-        params={"page": 0, "page_size": 100},
-        timeout=10,
-    )
-    for d in list_resp.json().get("result", []):
-        tbl = d.get("table_name", "")
-        if tbl in new_tables and tbl not in ds:
-            ds[tbl] = d["id"]
+    # Also pick up the ids of tables we'll build charts on that were already
+    # registered (registration answers 422 for those and resolves them by name, so
+    # this is the belt-and-braces path). The listing goes through the shared helper
+    # because this endpoint IGNORES a plain `page`/`page_size` param — it only
+    # honours the RISON `q` form, and a listing that silently returns one short page
+    # is how a seed ends up binding charts to whatever it happened to see.
+    from _superset_dataset_metadata import list_mart_datasets, refresh_datasets
+    registered = list_mart_datasets(token, args.superset_url, grocery_db_id)
+    for tbl in new_tables:
+        if tbl not in ds and tbl in registered:
+            ds[tbl] = registered[tbl]
     print()
+
+    # ── Step 1b: Refresh dataset column metadata ─────────────────────────────
+    # A dataset's column list is a snapshot taken at registration; the marts are
+    # CTAS-built on every dbt run, so a mart gaining or renaming a column leaves the
+    # dataset stale. Stale metadata is invisible to the chart API (200 with data) and
+    # breaks the tile in the browser only, so it has to be healed before Step 2 sets
+    # main_dttm_col and Step 3 binds the charts.
+    print("--- Step 1b: Refresh Dataset Column Metadata ---")
+    ok, failed = refresh_datasets(token, args.superset_url, ds)
+    print(f"  ✓ {ok} dataset(s) refreshed, {failed} failed\n")
 
     # ── Step 2: Set date columns ─────────────────────────────────────────────
     print("--- Step 2: Configure Date Columns ---")

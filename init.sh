@@ -96,6 +96,13 @@ cp $STACKS/superset/superset_config.py $CONF/superset/superset_config.py
 # to auto-provision the EDW database connection and import dashboards.
 cp $STACKS/superset/setup.py $CONF/superset/setup.py
 cp $STACKS/superset/_superset_query_context.py $CONF/superset/_superset_query_context.py
+# _superset_chart_params.py — the singular-metric rule for pie / big_number
+# charts, shared by the grocery-ops seed and the offline bundle repair. Without
+# it a seeded/imported pie chart renders "Unexpected error" forever.
+cp $STACKS/superset/_superset_chart_params.py $CONF/superset/_superset_chart_params.py
+# _superset_dataset_metadata.py — shared dataset-column refresh used by every seed
+# script (a dataset's column list is a snapshot; the marts are rebuilt by dbt).
+cp $STACKS/superset/_superset_dataset_metadata.py $CONF/superset/_superset_dataset_metadata.py
 cp $STACKS/superset/create_missing_dashboards.py $CONF/superset/create_missing_dashboards.py
 cp $STACKS/superset/create_grocery_ops_dashboard.py $CONF/superset/create_grocery_ops_dashboard.py
 cp $STACKS/superset/create_data_quality_dashboard.py $CONF/superset/create_data_quality_dashboard.py

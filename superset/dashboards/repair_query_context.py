@@ -112,28 +112,30 @@ def dataset_dttm_cols(entries):
     return out
 
 
-def build_chart_query_context(text, dttm_by_uuid):
-    """
-    Return (new_text, report) for a chart that needs repairing, or (None, report)
-    when it already carries a query_context.
-    """
-    doc = yaml.safe_load(text)
-    name = doc.get("slice_name") or "?"
-    report = {"slice_name": name, "action": "ok", "detail": ""}
-
-    existing = doc.get("query_context")
-    if existing not in (None, "", "null"):
-        report["detail"] = "already has a query_context (%d chars)" % len(str(existing))
-        return None, report
-
-    params = doc.get("params") or {}
+def resolve_datasource_id(params, name):
+    """The dataset id params carry (`<id>__table`) — the bundle's own pointer."""
     match = DATASOURCE_RE.match(str(params.get("datasource") or ""))
     if not match:
         raise SystemExit(
             "chart %r has no resolvable datasource in params (datasource=%r)"
             % (name, params.get("datasource"))
         )
-    ds_id = int(match.group(1))
+    return int(match.group(1))
+
+
+def query_context_for(doc, dttm_by_uuid):
+    """
+    Return (qc_json, ds_id, dttm) — the query_context the seed's own helper
+    (superset/_superset_query_context.build_query_context) builds for this
+    chart's params, resolved offline.
+
+    Shared with normalise_chart_metrics.py: a repair that rewrites `params` must
+    rebuild the stored query_context from the SAME rule, or the two can disagree
+    and the tile queries something the params do not say.
+    """
+    params = doc.get("params") or {}
+    name = doc.get("slice_name") or "?"
+    ds_id = resolve_datasource_id(params, name)
 
     # Mirror build_query_context()'s live behaviour: an explicit granularity in the
     # chart params wins and is copied through as-is; otherwise the dataset's
@@ -151,9 +153,12 @@ def build_chart_query_context(text, dttm_by_uuid):
     if from_dataset:
         qc["queries"][0]["granularity"] = dttm
         qc["queries"][0]["granularity_sqla"] = dttm
+    return json.dumps(qc), ds_id, dttm
 
-    qc_json = json.dumps(qc)
-    line = yaml.safe_dump(
+
+def query_context_line(qc_json):
+    """The chart file's `query_context:` line for a given query_context value."""
+    return yaml.safe_dump(
         {"query_context": qc_json},
         default_flow_style=False,
         sort_keys=False,
@@ -161,9 +166,31 @@ def build_chart_query_context(text, dttm_by_uuid):
         allow_unicode=True,
     ).rstrip("\n")
 
-    new_text, n = QC_LINE_RE.subn(lambda _m: line, text, count=1)
+
+def write_query_context_line(text, qc_json, name="?"):
+    """Replace the single `query_context:` line in a chart file."""
+    new_text, n = QC_LINE_RE.subn(lambda _m: query_context_line(qc_json), text, count=1)
     if n != 1:
         raise SystemExit("chart %r: expected exactly one query_context line, found %d" % (name, n))
+    return new_text
+
+
+def build_chart_query_context(text, dttm_by_uuid):
+    """
+    Return (new_text, report) for a chart that needs repairing, or (None, report)
+    when it already carries a query_context.
+    """
+    doc = yaml.safe_load(text)
+    name = doc.get("slice_name") or "?"
+    report = {"slice_name": name, "action": "ok", "detail": ""}
+
+    existing = doc.get("query_context")
+    if existing not in (None, "", "null"):
+        report["detail"] = "already has a query_context (%d chars)" % len(str(existing))
+        return None, report
+
+    qc_json, ds_id, dttm = query_context_for(doc, dttm_by_uuid)
+    new_text = write_query_context_line(text, qc_json, name)
 
     # The bundle is the contract with the importer — assert we only changed what
     # we meant to, and that what we wrote round-trips as the JSON string Superset

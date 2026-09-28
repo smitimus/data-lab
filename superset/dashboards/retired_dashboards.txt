@@ -1,0 +1,59 @@
+# Dashboards an OLDER bundle shipped and the current one does not.
+#
+# Why a list is needed at all: the bundled import is additive. install.sh imports
+# with `overwrite=true`, which re-creates/updates everything the bundle carries
+# and deletes nothing — so an instance that imported an older bundle keeps its
+# dashboards forever. These uuids are the ones an older bundle carried and the
+# current one cannot stand behind.
+#
+# install.sh's retire_dashboards() deletes each of them from Superset after the
+# import (by uuid, via the API), and bind_dashboard_layout.py drops them from the
+# bundle so a fresh install never creates them.
+#
+# Format: <uuid><whitespace><title>   (`#` starts a comment, blank lines ignored)
+
+# Gas Station Overview — shipped by the 2026-04-19 export (f8abb98).
+# Its charts (Total Revenue, Loyalty Attach Rate, Daily Revenue Trend,
+# POS vs Fuel Revenue, Revenue by Location, Fuel Sales by Grade, Top Product
+# Categories), its Gas_Station database and its mart_fuel_summary dataset were
+# NOT re-exported by e786a5e (2026-06-29, "Grocery Operations dashboard"), which
+# replaced the bundle with a grocery-only export and left the dashboard in. The
+# gas-station industry was archived in 04072e3 ("archive gas station industry —
+# grocery only"): there is no fuel mart in the EDW and no fuel column in any
+# mart, so the 7 tiles cannot be bound to anything that exists. Result: 7 tiles
+# rendering "There is no chart definition associated with this component".
+# The product's own gates expect 11 dashboards (e2e-testing/full-cycle.sh 8c,
+# superset/verify_seed.sh), which is exactly the scripted seed's set — this
+# dashboard was the 12th, and only ever came from the bundle.
+414fb7e9-325f-49f2-a67f-ab1781fc92c1	Gas Station Overview
+
+# Grocery Overview — shipped by the 2026-06-29 export (e786a5e) and by every one
+# since, retired 2026-09-21 (t_23a97d10). The bundle does not own this dashboard:
+# the scripted seed (superset/setup.py) builds it, and the seed's version is the
+# one the gates and the DOM scan certify.
+#
+# Why the bundle's copy could never converge onto it. Superset's dashboard
+# importer resolves the target of an imported dashboard by uuid first and, when
+# that misses, by the model's unique constraint — for `dashboards` that is
+# `slug` (commands/dashboard/importers/v1/utils.py, then
+# models/helpers.py ImportFromDictMixin.import_from_dict via
+# cls._unique_constraints()). `Grocery_Operations_5.yaml` ships
+# `slug: grocery-operations`, so it updates the seed's dashboard 1 **in place**
+# (one row). `Grocery_Overview_4.yaml` ships `slug: null`, so there is nothing to
+# match on and every import created a SECOND "Grocery Overview" next to the
+# seed's — 12 dashboards where 11 are expected, two of them titled the same, plus
+# a parallel generation of its 8 charts (measured on test 2026-09-21 before this
+# change: dash 2 = the seed's row with charts 1-8, dash 12 = this bundle's row
+# with slices 97-104, and every one of the 18 grocery chart names existing twice;
+# `slices` 106 → 114 charts). The seed then links its own charts to whichever row
+# it finds first by title and `link_charts_to_dashboard()` REPLACES
+# dashboard.slices — so the two owners overwrote each other's links on every run
+# (the "8 clean tiles + 8 'no chart definition' tiles" state this card was
+# raised for).
+#
+# The rule this settles: a dashboard the bundle ships must carry a slug (an
+# identity the importer can converge on). One that cannot is a duplicate
+# generator and belongs here instead. Grocery Overview stays with the seed,
+# which now resolves its own row by slug (`grocery-overview`) and links exactly
+# the charts its layout places.
+f44c04ef-0efd-461c-9d7e-68e9eb809870	Grocery Overview

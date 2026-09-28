@@ -2,13 +2,17 @@
 -- location, loyalty member, and transaction-level promotion flags/savings.
 -- This is the single source for downstream POS marts (mart_category_sales_performance, etc.)
 --
--- Promotion attribution note (data-lab#26): Verisim transactions expose ONLY has_coupon /
--- has_deal flags and coupon_savings / deal_savings dollar amounts -- no coupon_id / deal_id.
--- Coupon/combo catalogs (stg_pos_coupons, stg_pos_combo_deals) carry no transaction linkage.
--- Therefore promotion savings are carried at TRANSACTION level and allocated to items
--- proportionally to each item's share of the transaction line_total. Summing
--- allocated_promo_savings across a transaction's items recovers the transaction's
--- coupon_savings + deal_savings exactly. No per-item coupon attribution is possible.
+-- Promotion attribution note (data-lab#26, superseded in part by t_f0bdffaf):
+-- stg_pos_transaction_items now carries coupon_id / deal_id, so per-item promo
+-- attribution IS possible and mart_promotion_redemption does it directly. This
+-- model deliberately keeps the TRANSACTION-level allocation below: what it
+-- distributes is the transaction's coupon_savings + deal_savings, which the
+-- source reports only as transaction-level dollar amounts, and the items carry
+-- one promo id each rather than a per-item saving. Allocating that total
+-- proportionally to each item's share of the transaction line_total, so
+-- summing allocated_promo_savings across a transaction's items recovers the
+-- transaction's coupon_savings + deal_savings exactly. Changing this to
+-- item-level savings would be a modelled change, not a correction.
 
 {{
     config(

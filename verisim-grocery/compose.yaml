@@ -27,13 +27,31 @@ services:
     # fails loudly at `compose up` instead of coming up behind. `latest` is also why
     # this class cost us twice (the earlier minio `:latest` namespace went unpullable).
     #
-    # The build: verisim 4ec85ec (t_6d2ebc52, insert-clock windows on the transaction
-    # and order routes), built 2026-09-21T07:45Z, carried between hosts as the dated
-    # tag `smiti/verisim-grocery:dev-2026-09-21-0745`. It is NOT in the registry yet —
-    # `docker pull smiti/verisim-grocery@sha256:2900dbc…` is a 404. When verisim-dev
-    # publishes a release (t_6543a6fe) re-pin this line to the published reference,
-    # which is a deliberate, reviewable edit — not a tag that drifts underneath us.
-    image: smiti/verisim-grocery@sha256:2900dbc0073610ecaa749fd1f2bbfb1c9cf8fae9d26ca7256d21c91c7e5f56e4
+    # The build: verisim 37c8d7d (t_01b4fe4f — promotion validity windows that
+    # cover the transactions referencing them, so the 24k coupon / 7k deal
+    # items that sat outside their promo's window are gone, plus a live
+    # pos.coupons.uses_count) on top of 80b3e0f (t_51bbc12e, an insert clock on
+    # the order-events route and a state clock on orders — the two clocks the
+    # data-lab online-order ingest needs). Built 2026-09-21T18:25-04:00 on the
+    # brain host, carried between hosts as
+    # `smiti/verisim-grocery:t_01b4fe4f-2`. It is NOT in the registry yet —
+    # `docker pull smiti/verisim-grocery@sha256:39f53c4…` is a 404. When
+    # verisim-dev publishes a release (t_6543a6fe) re-pin this line to the
+    # published reference, which is a deliberate, reviewable edit — not a tag
+    # that drifts underneath us.
+    #
+    # Start-up of this build repairs the history already on disk in place
+    # (pos.reconcile_promotions): promo windows widen to cover recorded usage
+    # and pos.coupons.uses_count is recomputed from the redemptions, so the dev
+    # EDW goes green on assert_coupon_dates_valid / assert_deal_dates_valid
+    # after a re-ingest with no reseed.
+    #
+    # Previous pins: sha256:4639ee8… (verisim 37dc334, the first build of this
+    # same card — on this host as `smiti/verisim-grocery:t_01b4fe4f`) and
+    # sha256:e342aaf… (verisim e9bd295, t_51bbc12e — as `:t_51bbc12e` /
+    # `dev-2026-09-21-2147`). Rollback is re-pinning that line and
+    # `compose up -d --no-deps --force-recreate verisim-grocery`.
+    image: smiti/verisim-grocery@sha256:39f53c449f3b2ab8dc133aa7f644b2585c6fca421e6adc8068b2478fbdd6b900
     # A digest pin is immutable, so a pull can only re-fetch the same bytes or fail:
     # `missing` keeps `compose up` from chasing a registry manifest that does not exist
     # on a host that already holds the pinned image.

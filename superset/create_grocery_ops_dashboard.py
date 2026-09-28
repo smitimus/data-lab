@@ -1,8 +1,32 @@
 #!/usr/bin/env python3
 """
-Create Grocery Operations dashboard in Superset via REST API.
+Create the Grocery Operations dashboard in Superset via REST API.
 
-Creates datasets for 4 new mart tables, builds charts, assembles a dashboard.
+Creates/refreshes the datasets for the 4 mart tables it needs, builds the 10
+charts, assembles the dashboard, and links exactly the charts its layout places.
+
+WHO OWNS THIS DASHBOARD
+-----------------------
+The bundle ships it too (`superset/dashboards/verisim_grocery_dashboards.zip`,
+`dashboards/Grocery_Operations_5.yaml`), and on every instance that runs the
+documented install step the BUNDLE's layout and chart generation are the ones
+that render: the export converges onto this seed's dashboard row (its `slug:
+grocery-operations` is the unique constraint the importer falls back to) and the
+layout then names the bundle's charts. What this script builds is the FALLBACK a
+fresh instance shows before the marts exist and install.sh's import has run — a
+wipe cycle has no import at all, and that is the instance the e2e gates certify.
+
+The two chart generations cannot merge: a dashboard converges by slug, a CHART
+only by `uuid` (`commands/chart/importers/v1/utils.py`'s `import_chart()`), so a
+chart this seed created before the import is a SECOND `slices` row with the same
+name on the same dataset. install.sh's `prune_superseded_charts()` deletes that
+displaced generation after the import (no layout names it, no dashboard links
+it, and the imported layout places the same name on the same dataset — see
+superset/README.md). The seed's own idempotence is by name+dataset
+(`_find_chart_ids`, oldest first): re-running it on an instance whose generation
+the prune removed re-uses and repairs the bundle's row in place instead of
+appending another copy — `import_chart()` overwrites a chart it matches by uuid,
+so the next `--dashboards-only` restores the export's own payloads.
 
 Usage:
   python3 create_grocery_ops_dashboard.py [--superset-url URL] [--username USER] [--password PASS]
@@ -130,14 +154,15 @@ def build_chart_payload(ds_id, slice_name, viz_type, params_extra, token=None, b
         except Exception:
             pass
     
-    # Fix: pie and big_number charts expect singular "metric", not "metrics"
-    if viz_type in ("pie", "big_number_total", "big_number"):
-        if "metrics" in base_params and "metric" not in base_params:
-            val = base_params.pop("metrics")
-            if isinstance(val, list) and len(val) > 0:
-                base_params["metric"] = val[0]
-            elif isinstance(val, dict):
-                base_params["metric"] = val
+    # pie / big_number charts read the SINGULAR "metric"; without it the tile
+    # renders "Unexpected error" forever (orderby: [[null, false]]). The rule and
+    # its rationale live in ONE place — superset/_superset_chart_params.py — so
+    # the seed, the offline bundle repair and the bundle's regression gate cannot
+    # drift apart. Normalise unconditionally: charts seeded before the rule
+    # landed are still on live instances, so the payload built here must be able
+    # to *repair* them as well as create them (see create_chart).
+    from _superset_chart_params import normalise_metric_params
+    normalise_metric_params(viz_type, base_params, slice_name)
     
     return {
         "slice_name": slice_name,
@@ -344,6 +369,65 @@ CHARTS = [
     },
 ]
 
+def _find_chart_ids(token, base_url, slice_name, ds_id=None):
+    """Existing chart ids carrying this slice name on this dataset, oldest first.
+
+    Superset chart ids are instance-local (they drift on every seed/reseed), so
+    every lookup in this file is by NAME — never by a hardcoded id. Results are
+    oldest-first on purpose: the chart a *first* seed run created is the one most
+    likely to predate a later params fix, and reusing it is what lets an already
+    seeded instance heal in place instead of accumulating another duplicate.
+
+    Charts that carry the same name but live on a DIFFERENT dataset are reported
+    and skipped: re-asserting our params onto them is the "chart built against
+    the wrong mart" failure mode, not a repair.
+    """
+    ids = []
+    foreign = []
+    try:
+        page = 0
+        # The API caps an effective page at 100 rows whatever we ask for, so ask
+        # for exactly that and keep paging while the page comes back full. (A
+        # requested page_size of 500 returns 100 rows, which looks like "the last
+        # page" — that silently hid the OLDEST 'Stock Aging Breakdown' (id 9) and
+        # repaired a recent duplicate instead; the broken tile stayed broken.)
+        page_size = 100
+        while True:
+            r = requests.get(
+                urljoin(base_url, "/api/v1/chart/"),
+                headers=headers(token),
+                # Filter server-side by name: instances accumulate several hundred
+                # charts, and a plain page walk can miss the row we need to repair.
+                params={"q": json.dumps({
+                    "filters": [{"col": "slice_name", "opr": "eq", "value": slice_name}],
+                    "page": page,
+                    "page_size": page_size,
+                })},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                print(f"  ⚠ Chart lookup for '{slice_name}' failed: "
+                      f"{r.status_code} {r.text[:200]}")
+                return sorted(ids)
+            batch = r.json().get("result", [])
+            for c in batch:
+                if ds_id is not None and c.get("datasource_id") != ds_id:
+                    foreign.append((c["id"], c.get("datasource_id")))
+                    continue
+                ids.append(c["id"])
+            if len(batch) < page_size or page >= 20:
+                break
+            page += 1
+    except Exception as e:  # network/JSON problems must not kill the seed
+        print(f"  ⚠ Chart lookup for '{slice_name}' raised: {e}")
+        return sorted(ids)
+    if foreign:
+        print(f"  ℹ '{slice_name}' also exists on other datasets "
+              f"{sorted(set(d for _, d in foreign))} — left untouched, "
+              f"this chart is seeded on ds {ds_id}")
+    return sorted(ids)
+
+
 def create_chart(token, base_url, chart_def, ds_ids):
     ds_id = ds_ids.get(chart_def["ds_key"])
     if not ds_id:
@@ -358,6 +442,32 @@ def create_chart(token, base_url, chart_def, ds_ids):
         token,
         base_url,
     )
+
+    # Idempotent AND self-healing: if a chart with this name already exists on the
+    # resolved dataset, PUT the canonical payload over the OLDEST one instead of
+    # POSTing yet another row. Two defects are closed by that:
+    #   * legacy charts built by an earlier version of this seed (e.g. a pie whose
+    #     params only carry "metrics", which makes the frontend send
+    #     orderby:[[null,false]] and render "Unexpected error") are repaired in
+    #     place, so an instance that was seeded before the fix heals without a wipe;
+    #   * re-running the seed stops appending a duplicate chart set per run — that
+    #     accumulation is how dashboard 1 grew to 80 charts (and 80 rendered tiles)
+    #     from 10 definitions.
+    existing = _find_chart_ids(token, base_url, chart_def["slice_name"], ds_id)
+    if existing:
+        cid = existing[0]
+        # Never send `dashboards` on a PUT: the payload carries [] for create, and
+        # PUTting that would silently UNLINK the chart from its dashboard (the
+        # "no chart definition associated with this component" failure).
+        update_payload = {k: v for k, v in payload.items() if k != "dashboards"}
+        resp = requests.put(urljoin(base_url, f"/api/v1/chart/{cid}"),
+            headers=headers(token), json=update_payload, timeout=30)
+        if resp.status_code == 200:
+            print(f"  ~ Chart '{chart_def['slice_name']}' reused + repaired (ID={cid})")
+            return {"id": cid, "slice_name": chart_def["slice_name"]}
+        print(f"  ✗ Repair failed '{chart_def['slice_name']}' (ID={cid}): "
+              f"{resp.status_code} {resp.text[:300]}")
+        return None
 
     resp = requests.post(urljoin(base_url, "/api/v1/chart/"),
         headers=headers(token), json=payload, timeout=30)
@@ -507,6 +617,19 @@ def main():
     ]
     ds_ids = find_dataset_ids(token, args.superset_url, grocery_db_id, needed_tables)
     print(f"  Found datasets: {list(ds_ids.keys())}")
+
+    # Step 0: re-sync each dataset's column list from the physical table before
+    # anything points at a column. A dataset's columns are a snapshot taken at
+    # registration and the marts are CTAS-built on every dbt run, so a dataset can
+    # be missing a column that exists today. This is the exact case for
+    # mart_hourly_sales_pattern below: it gains the snapshot column `as_of_date`,
+    # and Step 1 then sets main_dttm_col to it. With stale metadata that step points
+    # the dataset at a column it does not have, and the chart 400s in the browser
+    # while the chart API keeps answering 200.
+    print("\nStep 0: Refreshing dataset column metadata...")
+    from _superset_dataset_metadata import refresh_datasets
+    refresh_datasets(token, args.superset_url, ds_ids)
+    print()
 
     # Step 1: Set main_dttm_col on datasets that have date columns
     print("\nStep 1: Configure dataset date columns...")

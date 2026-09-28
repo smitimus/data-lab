@@ -9,6 +9,26 @@ Strategy per table:
   - Incremental: query MAX(watermark_col) from raw table, fetch records created
     after that timestamp. Falls back to 365 days ago on an empty table.
 
+Read order: a route that references another relation is read BEFORE the route
+that serves it (REFERENCING_ROUTES, wired as task dependencies below). Every
+read is a snapshot of a live source, so a child route read after its parent can
+pick up a generator tick the parent's window had already closed over — events
+whose orders never landed, and a failing staging FK test on a healthy ingest.
+The referenced route's window then ends where its referencing routes' reads ended
+(`cut_from`), not at its own task start: both sides of a foreign key are judged
+at one instant, so the tick that would otherwise fall between them cannot.
+
+One pair needs a third thing on top of the read order and the cut, because its
+rows MUTATE after they are inserted: an online order's `status` moves long after
+its `created_at`, so a window anchored on the insert clock can neither see a
+state change on a row the watermark passed (the row is never re-read) nor be
+bounded by the child's read instant safely (an order excluded for having moved
+after it would sit below the next insert-clock watermark, i.e. lost, not
+delayed). Such a route is declared in `AS_OF_ROUTES`, anchored on the clock that
+moves with the mutation, and bounded by the instant its referencing route read
+to — `[MAX(<state clock>), the child's cut]`, both ends from one instant, so the
+state the parent holds matches the snapshot boundary the child was read at.
+
 The source (Verisim HTTP API + source DB) is addressed by Docker service name on
 the shared network — see the `datalab_shared` network in
 verisim-grocery/compose.yaml. It is deliberately not derived from the host's
@@ -341,10 +361,12 @@ TABLE_CONFIGS = [
      "incremental", "created_at", "created_after", "created_before"),
 
     # ── Online (e-commerce orders, t_24fae529) ──────────────────────────────
-    # Incremental on the INSERT clock since t_886f7d67 (source side: verisim
-    # `4ec85ec`, card t_6d2ebc52), the same switch as the POS pair above.
-    # `placed_dt` — the watermark from t_34d4d575 — is the tick time in steady
-    # state, and that is exactly what made it look safe. It is not: the source's
+    # History first, because it is what justifies each step, then the entry.
+    # It was incremental on the INSERT clock from t_886f7d67 (source side:
+    # verisim `4ec85ec`, card t_6d2ebc52) — the same switch as the POS pair
+    # above, taken off `placed_dt`, the watermark from t_34d4d575. `placed_dt` is
+    # the tick time in steady state, and that is exactly what made it look safe.
+    # It is not: the source's
     # backfill path replays a day hour by hour (`main.py` →
     # `online.generate_online_orders(conn, cfg, sim_dt, ...)` with `sim_dt` at
     # the hour boundary, and the INSERT writes `placed_dt = sim_dt`), so a
@@ -354,14 +376,59 @@ TABLE_CONFIGS = [
     # excess only.
     # `created_at` is `DEFAULT NOW()`, written by the same statement as the row:
     # monotone in insert order and immutable, so the delta is the batch itself.
-    # Measured before the switch on the dev slot: this table had NO such gap
+    # Measured before that switch on the dev slot: this table had NO such gap
     # (11080 orders / 210114 lines, key-for-key identical to the source), so
     # nothing was healed here and this is the pair that took the transition
     # branch (no `created_at` column in raw yet → bounded fallback + WARNING,
-    # then watermark) rather than being healed first.
+    # then watermark) rather than being healed first. The insert clock was the
+    # right fix for the backdating defect; it is simply not the right clock for a
+    # row whose STATE moves, which is the next switch.
+    # Watermark moved from the insert clock to the STATE clock in t_5a16129f:
+    # `updated_after`/`updated_before` on `updated_at`, which verisim `e9bd295`
+    # (card t_51bbc12e) added to the payload and the window. Two defects, one
+    # cause — the insert clock cannot express "as of":
+    #
+    #   * it cannot see a state change. `created_at` is fixed at insert, so once
+    #     a newer order has moved the watermark past an older row, that row is
+    #     never re-read: an order loaded as 'placed' keeps that status in raw
+    #     forever. Nothing asserted on it (the reconcile test looks for completed
+    #     orders, not stale ones), and the events route being a FULL reload hid
+    #     it — the state was as fresh as the last full read of the pair.
+    #   * it cannot be bounded safely. The completion residual (t_7e427ee6 →
+    #     t_5a16129f) is an order that completes *while this route is being
+    #     read*: it satisfies `created_before=<cut>` (it was created long before)
+    #     and lands as 'completed' while its terminal event, inserted after the
+    #     cut, is not read until the next run — 5 rows on the test slot's
+    #     2026-09-21T21:22:29Z fresh seed, healed by the next events read, which
+    #     is what made it look like a flake. Excluding it needs the cut on the
+    #     end bound; doing that on the insert clock loses the row instead of
+    #     delaying it (its `created_at` is below the next watermark).
+    #
+    # `updated_at` is what a watermark needs: `DEFAULT NOW()`, written by the
+    # same statement that writes the row, and bumped by every lifecycle step —
+    # so it is monotone in state-change order and immutable between changes.
+    # That it moves with the STATE and not only with inserts is what makes the
+    # delta complete: an old row whose status just changed is picked up, which
+    # is the answer to the first bullet above.
+    #
+    # And it is the child's clock for the same row: the generator stamps a status
+    # change and the event that explains it in ONE transaction, so
+    # `updated_at == MAX(online.order_events.created_at)` for every order —
+    # measured on the dev slot 2026-09-21: 39243 of 39243 orders, 0 differing.
+    # verisim `80b3e0f` pins that source-side; without it this switch would be
+    # unsound, because a transition that did not bump `updated_at` would be
+    # invisible to every subsequent run. That equality is what makes the window
+    # `[MAX(updated_at) in raw, the events route's read cut]` (AS_OF_ROUTES)
+    # safe: no order is loaded ahead of the event that explains it, and none is
+    # left behind.
+    #
+    # The route still accepts `created_after`/`created_before` (`created_at`);
+    # this config deliberately does not use them. `updated_*` is the load's
+    # window, and a DAG-param run applies `start_dt` to `updated_after` and the
+    # child's cut to `updated_before` (see the as-of branch in `ingest_table`).
     ("online_orders", "/grocery/online/orders",
      "raw_online", "orders", "order_id",
-     "incremental", "created_at", "created_after", "created_before"),
+     "incremental", "updated_at", "updated_after", "updated_before"),
 
     # Incremental since t_34d4d575, on the insert clock since t_886f7d67 (the
     # same switch as its header — the line has no timestamp of its own, so the
@@ -384,13 +451,52 @@ TABLE_CONFIGS = [
     # params; the recipe and its measured cost are in airflow/README.md →
     # "Forcing a full reload" (measured 2026-09-21: 265 requests / 36.9 s for this
     # table, and the whole ingest 1691 requests / 117.7 s).
+    #
+    # Its window END is not its own task start since t_5a16129f: it is
+    # `online_order_events`'s read instant (SNAPSHOT_BOUND_ROUTES), so the whole
+    # online cluster — the events, these lines, and the order they belong to — is
+    # judged at one instant. The clock and the watermark are unchanged: `created_at`
+    # is still what this route loads and watermarks on, and a line inserted after
+    # the instant is read by the next run.
     ("online_order_items", "/grocery/online/order-items",
      "raw_online", "order_items", "item_id",
      "incremental", "created_at", "created_after", "created_before"),
 
+    # Incremental on the INSERT clock since t_5a16129f (source side: verisim
+    # `e9bd295`, card t_51bbc12e), where it used to be a FULL reload.
+    #
+    # There was no clock to watermark on before that, and the reason is worth
+    # keeping: `online.order_events.created_at` has existed since the online
+    # channel landed (`0cfd0ed`) and the generator writes it (`DEFAULT NOW()`,
+    # same statement as the row) — what was missing was the ROUTE: `/grocery/
+    # online/order-events` declared no window on it and returned no such column,
+    # so a configured window was silently ignored and a full reload was the only
+    # load the source offered (measured 2026-09-21: 184165 rows on the dev slot,
+    # 60797 on the test slot's fresh seed).
+    #
+    # That cost more than bytes. A `full` route ignores the read cut (it reads
+    # the whole table, so its cut is its last read rather than an instant both
+    # windows can end at), so the read order t_7e427ee6 put in place was only
+    # half wired for this pair: the events route read past the instant the orders
+    # window closed at, and an order completing inside that gap landed as
+    # 'completed' with its event still unread. Windowed, this route's cut IS the
+    # instant the orders route is bounded by (AS_OF_ROUTES), so the two routes
+    # are judged at one point in time instead of at two.
+    #
+    # `created_at` is `DEFAULT NOW()`, written by the same statement as the row:
+    # monotone in insert order and immutable, the property a watermark needs.
+    # No `created_at` column is in the raw table yet (this route has never
+    # returned one), so the FIRST run with this config takes the
+    # missing-watermark transition branch in `ingest_table` — a bounded fallback
+    # window with a WARNING naming the column, which is also the load that
+    # delivers the column via the payload ALTER in `_detect_schema_drift`. The
+    # watermark is used from the run after that one. On a fresh seed the table is
+    # empty, so the other fallback branch fires instead and the column arrives
+    # with the first payload; either way the history is inside the 365-day
+    # horizon (the source seeds ~30 days).
     ("online_order_events", "/grocery/online/order-events",
      "raw_online", "order_events", "event_id",
-     "full", None, None, None),
+     "incremental", "created_at", "created_after", "created_before"),
 
     # ── Timeclock ────────────────────────────────────────────────────────────
     ("timeclock_events", "/grocery/timeclock/events",
@@ -521,6 +627,230 @@ if _unmapped:
     raise ValueError(
         "SOURCE_RELATIONS is missing entries for configured table(s): "
         + ", ".join(_unmapped)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Read order — a route that references another relation is read BEFORE it
+# ---------------------------------------------------------------------------
+# Every route is read independently and each read is a point-in-time snapshot of
+# a live source, so a row can only carry a foreign key whose parent was already
+# committed when that route was read. Read the child AFTER the parent and it can
+# pick up a generator tick the parent's window had already closed over: the
+# events land, their orders never do, and dbt's `relationships` test fails the
+# pipeline on a perfectly healthy ingest.
+#
+# Measured on the dev slot, 2026-09-21 (the dev instance ticks every 30 s):
+#   online_orders        14:00:05.98 → 14:00:10.27   incremental, window ends at
+#                                                    its own task start (now_iso)
+#   online_order_events  14:00:09.72 → 14:00:28.90   FULL reload — no window, so
+#                                                    it pages past its own start
+# The events route began 3.7 s after the orders route and reloaded 145k rows for
+# 19 s, so it read ticks at 14:00:13 and 14:00:27 that the orders window (closed
+# at 14:00:05.98) could not see. Result: 8 staged events with no staged order and
+# `relationships_stg_online_order_events_order_id__order_id__ref_stg_online_orders_`
+# red on a fresh seed — nightly failure, and mild because marts still build
+# (t_7e427ee6; on the test slot the same shape was 10 events at 20:04:13.717).
+#
+# Reading the child FIRST closes it: the parent's read then ends after everything
+# the child could have seen, so every parent the child loaded is inside the
+# parent's window — its upper bound is that later read, and its lower bound is
+# either `MAX(watermark)` in raw (above which every unseen row necessarily sits:
+# an unloaded parent's insert clock is newer than every loaded one, or the
+# incremental invariant that made the watermark sound was already broken) or, for
+# a `full` reload, a fresh mirror of the source. The reverse skew — a parent with
+# no child yet — is the benign direction; the next run delivers the child.
+#
+# The upper bound is not the parent's own task start though: that is a scheduling
+# gap *later* than the child's read, and it makes the foreign key hold by
+# accident of scheduling rather than by construction. A parent's window ends
+# where its children's reads ended (`cut_from` in `ingest_table`) — the latest of
+# them, so it still reads past everything that references it.
+#
+# The list is exactly the cross-route `relationships` tests in
+# airflow/dbt/grocery/models/staging/staging.yml, master data included — the
+# generator also hires employees, adds loyalty members and re-seeds coupons
+# mid-run, so a master read early is stale in the same way. `dags/tests/
+# test_load_order.py` fails when this list drifts from that suite, which is
+# deliberate: the FK test is only assertable because this read order makes it
+# true. Add a dbt FK test, declare its read order here.
+REFERENCING_ROUTES = [
+    # child route (read first)          parent route (read after)
+    # ── POS ─────────────────────────────────────────────────────────────────
+    ("pos_transaction_items",           "pos_transactions"),
+    ("pos_loyalty_point_transactions",  "pos_transactions"),
+    ("pos_returns",                     "pos_transactions"),
+    ("pos_return_items",                "pos_returns"),
+    ("pos_return_items",                "pos_transaction_items"),
+    # The promotions a line was discounted by (coupon_id / deal_id, surfaced on
+    # stg_pos_transaction_items by t_f0bdffaf). Child first, as everywhere else:
+    # the items route reads, then each promo route reloads its table, so every
+    # coupon/deal those lines reference is in raw before the lines are staged.
+    # Both promo routes are `full` mirrors of an `active_only` API route
+    # (SOURCE_PARTIAL), which is why the dbt side of these two edges is
+    # `severity: warn`: a promo deactivated after it was used legitimately drops
+    # out of the source snapshot while the items that reference it stay — a real
+    # gap in the source, not a defect in the model. Declaring the edges is what
+    # leaves that warn measuring the source's gap and nothing else; undeclared,
+    # whether the parent is in raw at all is scheduling luck (t_27132746, on the
+    # FK tests 1c9a833 added).
+    ("pos_transaction_items",           "pos_coupons"),
+    ("pos_transaction_items",           "pos_combo_deals"),
+    ("pos_products",                    "pos_departments"),
+    ("pos_loyalty_point_transactions",  "pos_loyalty_members"),
+    # ── Online ──────────────────────────────────────────────────────────────
+    ("online_order_items",              "online_orders"),
+    ("online_order_events",             "online_orders"),
+    # ── Ordering → fulfillment → transport ──────────────────────────────────
+    ("ordering_store_order_items",      "ordering_store_orders"),
+    ("fulfillment_orders",              "ordering_store_orders"),
+    ("fulfillment_items",               "fulfillment_orders"),
+    ("transport_load_items",            "transport_loads"),
+    ("transport_load_items",            "fulfillment_orders"),
+    ("transport_load_items",            "ordering_store_orders"),
+    ("transport_loads",                 "transport_trucks"),
+    # ── Inventory / pricing ─────────────────────────────────────────────────
+    ("inv_receipt_items",               "inv_receipts"),
+    ("inv_products",                    "pos_products"),
+    ("inv_stock_levels",                "pos_products"),
+    ("inv_receipt_items",               "pos_products"),
+    ("inv_shrinkage_events",            "pos_products"),
+    ("pricing_ad_items",                "pricing_weekly_ads"),
+    ("pricing_ad_items",                "pos_products"),
+    # ── Product / item rows reference the products they were sold as ────────
+    ("pos_transaction_items",           "pos_products"),
+    ("online_order_items",              "pos_products"),
+    ("ordering_store_order_items",      "pos_products"),
+    ("fulfillment_items",               "pos_products"),
+    # ── Master data those routes reference ──────────────────────────────────
+    ("hr_employees",                    "hr_locations"),
+    ("hr_schedules",                    "hr_employees"),
+    ("hr_schedules",                    "hr_locations"),
+    ("timeclock_events",                "hr_employees"),
+    ("timeclock_events",                "hr_locations"),
+    ("pos_transactions",                "hr_employees"),
+    ("pos_transactions",                "hr_locations"),
+    ("pos_returns",                     "hr_locations"),
+    ("online_orders",                   "hr_locations"),
+    ("ordering_store_orders",           "hr_locations"),
+    ("fulfillment_orders",              "hr_locations"),
+    ("transport_loads",                 "hr_employees"),
+    ("transport_loads",                 "hr_locations"),
+    ("inv_stock_levels",                "hr_locations"),
+    ("inv_receipts",                    "hr_locations"),
+    ("inv_shrinkage_events",            "hr_locations"),
+]
+
+_routes = {c[0] for c in TABLE_CONFIGS}
+_unknown_routes = sorted({t for pair in REFERENCING_ROUTES for t in pair} - _routes)
+if _unknown_routes:
+    raise ValueError(
+        "REFERENCING_ROUTES names task(s) that TABLE_CONFIGS does not declare: "
+        + ", ".join(_unknown_routes)
+    )
+
+
+# ---------------------------------------------------------------------------
+# As-of routes — a referenced route whose rows MUTATE after they are inserted
+# ---------------------------------------------------------------------------
+# The read cut above is enough when a row's state is fixed at insert: an event
+# read by instant B has a parent whose insert clock is inside the parent's
+# `[MAX(created_at), B]` window, so whichever run loads the parent, both sides of
+# the foreign key agree.
+#
+# It is not enough for `online_orders`. The generator mutates that row's status
+# long after the insert (placed → confirmed → picking → picked_up/delivered), so
+# there is a state to be "as of" that an insert clock cannot express, and the
+# pair fails in both directions on a live source:
+#
+#   * `assert_online_orders_reconcile` — an order that completes *while the
+#     orders route is being read* is 'completed' in the row and its terminal
+#     event is not in the events read (that read finished at B, the order moved
+#     after B). 5 rows on the test slot's 2026-09-21T21:22:29Z fresh seed; the
+#     next events read healed it, which is what made it look like a flake. This
+#     is the residual t_7e427ee6 filed and t_5a16129f closes.
+#   * the mirror image: a `created_at` watermark moves past an old row and that
+#     row is never re-read, so a status change on it stays wrong in raw forever.
+#
+# So a route like that is declared here, with the clock that moves when the row's
+# state does, and is read as `[MAX(<state clock> in raw), the instant its
+# referencing route read to]`:
+#
+#   * the LOWER bound is the state clock, so a status change is a delta like any
+#     other and no row is ever left behind (the second bullet above);
+#   * the UPPER bound is the cut of the route named in `bounded_by` — that
+#     route's own window end, i.e. one instant captured before either route read
+#     — so the parent holds no state newer than the child's snapshot (the first
+#     bullet).
+#
+# The provider is named rather than "the latest of my children's cuts": the pair
+# is only judged at one instant if the bound IS the child's window end. Taking
+# the max over the children (what a plain `cut_from` route does) would let a
+# sibling child that started a second later push the bound past the window the
+# events were actually read in — reintroducing exactly the residual, in miniature.
+#
+# The state clock has to be what a watermark needs — written in the same statement
+# as the row, monotone, immutable between changes — and, for the bound to mean
+# what it says, equal to the CHILD's clock for that row: the generator writes a
+# status change and the event that explains it in one transaction, so
+# `updated_at == MAX(online.order_events.created_at)` per order (measured on the
+# dev slot 2026-09-21: 39243 of 39243 orders, 0 differing). verisim `80b3e0f`
+# (card t_51bbc12e) pins that source-side — a transition that stopped bumping
+# `updated_at` would make this window silently incomplete.
+#
+# `dags/tests/test_load_order.py` (section 5) and
+# `dags/tests/test_incremental_watermarks.py` (section 5) fail when this
+# declaration, its `TABLE_CONFIGS` entry, `REFERENCING_ROUTES` and the DAG wiring
+# drift apart.
+AS_OF_ROUTES = {
+    # route whose rows mutate  ->  the clock that moves with the mutation, the
+    # window bounds it must be configured with, and the route whose read instant
+    # bounds it (which must be read FIRST — see REFERENCING_ROUTES)
+    "online_orders": {
+        "state_clock": "updated_at",
+        "bounds": ("updated_after", "updated_before"),
+        "bounded_by": "online_order_events",
+    },
+}
+
+# A route whose window has to end at ANOTHER route's read instant without
+# referencing it. An as-of pair is one cluster judged at one instant (see above);
+# every route in that cluster ends its window there, whatever clock it watermarks
+# on.
+#
+# Only `online_order_items` needs this, and the reason is the FK it carries INTO
+# the cluster. The cluster's instant is `online_order_events`'s window end (the
+# state route's own instant, `AS_OF_ROUTES`). `online_orders` ends there, so an
+# item route ending at its own task start — a few seconds later — can hand over a
+# row the orders window cannot see: an order INSERTed after the instant, in the
+# same transaction as the item that references it. The item is loaded, its order is
+# not, and no later run re-reads it — an insert clock does not look back. That is
+# the orphan class t_7e427ee6 closed by ordering the reads, arriving through the
+# one edge whose bound is a specific instant rather than the latest child's read.
+# (It held on the dev slot by accident of task creation order — items is declared
+# before events, so it started first. Accident is what t_7e427ee6's comment calls
+# out as not good enough.)
+#
+# Ending at the instant instead is safe in the other direction: this route
+# watermarks on `created_at`, immutable and monotone, so an item inserted between
+# the instant and its own read is DELAYED to the next run — its insert clock is
+# above the next watermark — rather than lost. Same property that lets every other
+# insert-clock route end at a cut.
+#
+# Wired like a `cut_from` edge (contract in the route's own config, edge in the
+# DAG body, read order asserted): `dags/tests/test_load_order.py` 6a–6d.
+SNAPSHOT_BOUND_ROUTES = {
+    # route that ends at an instant  ->  the route whose read instant it is
+    "online_order_items": "online_order_events",
+}
+
+_unknown_instant_routes = sorted(
+    (set(SNAPSHOT_BOUND_ROUTES) | set(SNAPSHOT_BOUND_ROUTES.values())) - _routes
+)
+if _unknown_instant_routes:
+    raise ValueError(
+        "SNAPSHOT_BOUND_ROUTES names task(s) that TABLE_CONFIGS does not "
+        "declare: " + ", ".join(_unknown_instant_routes)
     )
 
 
@@ -1212,10 +1542,136 @@ def ingest_table(
     watermark_col,
     api_start_param,
     api_end_param,
+    cut_from=(),
     **context,
-) -> None:
+) -> dict:
     params_conf = context.get("params") or {}
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # The run's read cut. A referencing route reads before the route it
+    # references (REFERENCING_ROUTES in the DAG body), so the referenced route's
+    # window has to END where its referencing routes' reads ended — not at its own
+    # task start, which is a scheduling gap later than them. Both invariants the
+    # online pair is judged on need the two routes to share one instant:
+    #   * an event that was read must find its parent order loaded → the parent's
+    #     coverage has to REACH the child's read end;
+    #   * a completed order that was loaded must find its final event loaded →
+    #     the parent's coverage must NOT PASS the child's read end.
+    # Read in that order and the gap between them is the whole defect; read in
+    # this one and it is the last thing that is left of it. `cut_from` names the
+    # tasks that reference this route; each returns the instant its own read
+    # ended, and this route's window ends at the LATEST of them — a referenced
+    # route reads at least as far as everything that references it, which is what
+    # the foreign keys need (an event's parent is loaded because the parent read
+    # past the events read; the earliest child's end would leave the events route
+    # reading past the orders window, measured: 29 orphans on the dev slot). A
+    # route nothing references keeps its own task start (the previous behaviour),
+    # and a `full` route ignores the cut: it reads the whole table, so it already
+    # covers any cut its children can report.
+    #
+    # An AS_OF_ROUTES route is stricter: it does not take the LATEST of its
+    # children's cuts but the cut of the one that shares its clock
+    # (`bounded_by`), because its window is anchored on a STATE clock and the
+    # bound has to be the instant the child's window ended at, not a sibling's
+    # later start. See AS_OF_ROUTES.
+    as_of = AS_OF_ROUTES.get(task_id)
+    instant = SNAPSHOT_BOUND_ROUTES.get(task_id)
+    if as_of and as_of["bounded_by"] not in cut_from:
+        # A wiring error, not a data condition: the route would be read as a
+        # state snapshot with no snapshot boundary — the residual AS_OF_ROUTES
+        # exists to close — and every later run would inherit whatever it loaded.
+        raise RuntimeError(
+            f"[{task_id}] is declared as-of ({as_of['state_clock']}) but "
+            f"{as_of['bounded_by']} is not one of its cut providers "
+            f"(cut_from={list(cut_from) or 'none'}), so its window end would fall "
+            "back to this task's own start. Refusing to load: fix the "
+            "AS_OF_ROUTES/REFERENCING_ROUTES wiring in the DAG body."
+        )
+    if instant and instant not in cut_from:
+        # Same class of wiring error: this route has to end at another route's
+        # read instant (the FK cluster is judged there), and its own task start
+        # is a later instant the routes it must agree with cannot see.
+        raise RuntimeError(
+            f"[{task_id}] is declared snapshot-bound to {instant} but "
+            f"{instant} is not one of its cut providers "
+            f"(cut_from={list(cut_from) or 'none'}), so its window end would fall "
+            "back to this task's own start. Refusing to load: fix the "
+            "SNAPSHOT_BOUND_ROUTES wiring in the DAG body."
+        )
+    read_cut = None
+    if cut_from:
+        # `cut_from` names routes the way TABLE_CONFIGS and REFERENCING_ROUTES do,
+        # but XCom is keyed on the rendered task_id — TaskGroup namespacing
+        # prefixes it (`ingest_online.online_order_events`). Resolve against the
+        # DAG's own tasks so a rename cannot silently degrade to the fallback.
+        by_route = {t.task_id.rsplit(".", 1)[-1]: t.task_id
+                    for t in context["dag"].tasks}
+        unknown = sorted(set(cut_from) - set(by_route))
+        if unknown:
+            log.warning("[%s] cut_from names task(s) this DAG does not have: %s",
+                        task_id, ", ".join(unknown))
+        named = [(name, by_route[name]) for name in cut_from if name in by_route]
+        pulled = context["ti"].xcom_pull(task_ids=[t for _, t in named]) if named else None
+        if not isinstance(pulled, list):
+            pulled = [pulled] if named else []
+        cuts = {}
+        for (name, _task_id), value in zip(named, pulled):
+            raw_cut = value.get("cut") if isinstance(value, dict) else None
+            if not raw_cut:
+                continue
+            try:
+                parsed = datetime.fromisoformat(raw_cut)
+            except (TypeError, ValueError):
+                log.warning("[%s] unparseable read cut %r from a referencing task",
+                            task_id, raw_cut)
+                continue
+            cuts[name] = (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc),
+                          raw_cut)
+        if as_of:
+            # An as-of route's bound is not a choice between its children: it is
+            # the window end of the one that shares its clock. Without it the load
+            # would be a state read with no snapshot boundary — the residual
+            # AS_OF_ROUTES exists to close — so it refuses rather than falling
+            # back to its own task start.
+            provider = as_of["bounded_by"]
+            if provider not in cuts:
+                raise RuntimeError(
+                    f"[{task_id}] is declared as-of ({as_of['state_clock']}) but "
+                    f"{provider} returned no read cut, so its window end would fall "
+                    f"back to this task's own start and the state it loads need not "
+                    f"match {provider}'s snapshot. Refusing to load: fix the "
+                    "AS_OF_ROUTES/REFERENCING_ROUTES wiring in the DAG body."
+                )
+            read_cut = cuts[provider][1]
+            log.info("[%s] as-of bound: %s takes the window end of %s (%s) — its own "
+                     "task start is deliberately NOT used", task_id,
+                     as_of["state_clock"], provider, read_cut)
+        elif instant:
+            # The same refusal, for the FK side of the cluster: this route ends
+            # where the state route's instant is, so an insert-clock row it loads
+            # cannot reference a parent the state-bounded window does not carry.
+            if instant not in cuts:
+                raise RuntimeError(
+                    f"[{task_id}] is declared snapshot-bound to {instant} but "
+                    f"{instant} returned no read cut, so its window end would fall "
+                    f"back to this task's own start and it could load a row whose "
+                    f"parent {instant} did not read. Refusing to load: fix the "
+                    "SNAPSHOT_BOUND_ROUTES wiring in the DAG body."
+                )
+            read_cut = cuts[instant][1]
+            log.info("[%s] snapshot bound: %s ends at %s's read instant (%s) — its "
+                     "own task start is deliberately NOT used", task_id,
+                     watermark_col, instant, read_cut)
+        elif cuts:
+            read_cut = max(cuts.values())[1]
+        else:
+            log.warning(
+                "[%s] none of %s returned a read cut — this window ends at this "
+                "task's own start instead, so a generator tick landing between "
+                "their reads and this one can be loaded as a parent whose child "
+                "row its referencing route did not read",
+                task_id, ", ".join(cut_from),
+            )
 
     conn = _edw_conn()
     try:
@@ -1245,6 +1701,11 @@ def ingest_table(
             raw_cols = []
             table_exists = False
 
+        # `end` is an incremental load's coverage end (its window end); a
+        # whole-table load has none. Initialised here so the cut returned at the
+        # end of the task is total whatever the config says.
+        end = None
+
         if strategy == "full":
             if table_exists:
                 with conn.cursor() as cur:
@@ -1269,10 +1730,21 @@ def ingest_table(
             if params_conf.get("start_dt") and params_conf.get("end_dt"):
                 start = params_conf["start_dt"]
                 end = params_conf["end_dt"]
-                log.info("[%s] param window: %s → %s", task_id, start, end)
+                if as_of or instant:
+                    # Even a param-driven reload keeps an as-of or snapshot-bound
+                    # route's END at the instant the route it shares the cluster
+                    # with read to. Capping the end cannot narrow the reload: that
+                    # route is windowed (test_load_order.py 5d/6c) and a param run
+                    # gives it the same `end_dt`, so its cut is that value. It is
+                    # what keeps a wide-window run from loading a state newer than
+                    # the events snapshot it was read against — or an item whose
+                    # order that snapshot does not carry.
+                    end = read_cut
+                log.info("[%s] param window: %s → %s%s", task_id, start, end,
+                         " (end held at the cluster instant)" if (as_of or instant) else "")
             elif table_exists and watermark_col in raw_cols:
                 start = _get_watermark(conn, raw_schema, raw_table, watermark_col)
-                end = now_iso
+                end = read_cut or now_iso
                 lookback_days = INCREMENTAL_LOOKBACK_DAYS.get(task_id)
                 if lookback_days:
                     # The watermark is a backdating column: the rows that were
@@ -1290,7 +1762,8 @@ def ingest_table(
                              "reaching %d days back of it: window %s → %s",
                              task_id, watermark_col, lookback_days, start, end)
                 else:
-                    log.info("[%s] watermark window: %s → %s", task_id, start, end)
+                    log.info("[%s] watermark window: %s → %s%s", task_id, start, end,
+                             f" [read cut from {', '.join(cut_from)}]" if read_cut else "")
             elif table_exists:
                 # Populated table, no usable watermark: it does not hold the
                 # column this config watermarks on. That is a transition, not a
@@ -1322,7 +1795,7 @@ def ingest_table(
                 # by row count.
                 fb = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_FALLBACK_DAYS)
                 start = fb.isoformat()
-                end = now_iso
+                end = read_cut or now_iso
                 log.warning(
                     "[%s] %s.%s has rows but no %s column to watermark on — "
                     "falling back to the last %d days (%s → %s). Only a "
@@ -1335,7 +1808,7 @@ def ingest_table(
             else:
                 fb = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_FALLBACK_DAYS)
                 start = fb.isoformat()
-                end = now_iso
+                end = read_cut or now_iso
                 log.info("[%s] no table yet — fallback window: %s → %s", task_id, start, end)
 
             # Some endpoints expect date-only (YYYY-MM-DD) not full ISO timestamps
@@ -1458,6 +1931,12 @@ def ingest_table(
             page_num += 1
             log.info("[%s] page %d: inserted %d rows (total so far: %d)", task_id, page_num, n, written)
 
+        # Every row-bearing read is behind us — the reconciliation probes below
+        # count rows, they do not load them — so this is the instant up to which
+        # this load provably saw the source. That is the cut this route hands to
+        # the routes it references (see `cut_from`).
+        read_end = datetime.now(timezone.utc)
+
         # Reconciliation: every row the source advertised for this window has to be
         # in the table. Measured against distinct keys rather than fetched rows,
         # because an unstable page order returns duplicates in place of the rows it
@@ -1488,6 +1967,18 @@ def ingest_table(
                          task_id, landed, bar)
 
         log.info("[%s] done — %d total rows written to %s.%s", task_id, written, raw_schema, raw_table)
+
+        # The cut this route offers the routes it references. An incremental
+        # load's coverage ends at its window end (`end`): rows newer than that
+        # are filtered out of the load even though they were physically read. A
+        # whole-table load has no window, so its coverage ends where its reads
+        # did — and everything it read, it read before `read_end`.
+        return {
+            "task_id": task_id,
+            "rows": written,
+            "cut": (end or read_end.isoformat()) if strategy == "incremental"
+                   else read_end.isoformat(),
+        }
 
     finally:
         conn.close()
@@ -1715,6 +2206,20 @@ with DAG(
     tags=["grocery", "api", "ingest", "granular"],
 ) as dag:
 
+    # The run's read cut: each route that something references takes the earliest
+    # read end of its referencing routes as the end of its own window (see
+    # `cut_from` in ingest_table), so the two sides of a foreign key are judged at
+    # one instant rather than across a scheduling gap.
+    cut_from: dict = {}
+    for child_route, parent_route in REFERENCING_ROUTES:
+        cut_from.setdefault(parent_route, set()).add(child_route)
+    # A snapshot-bound route ends at another route's instant on an edge that is
+    # not a foreign key (SNAPSHOT_BOUND_ROUTES): same mechanism, so the route it
+    # depends on is read first and the bound is one run's instant rather than a
+    # sibling's own start.
+    for route, instant_route in SNAPSHOT_BOUND_ROUTES.items():
+        cut_from.setdefault(route, set()).add(instant_route)
+
     ingest_tasks = []
     for schema, table_list in grouped.items():
         with TaskGroup(group_id=f"ingest_{schema}"):
@@ -1733,9 +2238,28 @@ with DAG(
                         "watermark_col": watermark_col,
                         "api_start_param": api_start_param,
                         "api_end_param": api_end_param,
+                        "cut_from": sorted(cut_from.get(tid, ())),
                     },
                     execution_timeout=timedelta(minutes=60),
                 ))
+
+    # Read order (see REFERENCING_ROUTES): a referencing route finishes reading
+    # before the route it references starts, so the referenced route's window
+    # covers every parent row its children could have picked up. Airflow
+    # dependencies are transitive here, so a chain like
+    # `pos_return_items → pos_transaction_items → pos_transactions` is ordered
+    # by declaring the two adjacent edges only.
+    # TaskGroup namespacing prefixes the task_id (`ingest_pos.pos_transactions`),
+    # so key the lookup on the last component — the route name — and assert the
+    # mapping is 1:1 so a name collision cannot silently drop an edge.
+    by_task_id = {t.task_id.rsplit(".", 1)[-1]: t for t in ingest_tasks}
+    assert len(by_task_id) == len(ingest_tasks), "route names collide after TaskGroup prefixes"
+    for child_route, parent_route in REFERENCING_ROUTES:
+        by_task_id[child_route] >> by_task_id[parent_route]
+    # ... and the snapshot-bound route is read after the route whose instant it
+    # ends at (SNAPSHOT_BOUND_ROUTES), which is what makes its cut available.
+    for route, instant_route in SNAPSHOT_BOUND_ROUTES.items():
+        by_task_id[instant_route] >> by_task_id[route]
 
     # Runs whatever the ingest tasks did (all_done): the invariant exists to
     # fail loudly, so it must not be skipped because a sibling already failed.

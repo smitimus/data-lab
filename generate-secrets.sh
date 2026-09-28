@@ -27,7 +27,23 @@
 #   - Shared secret is generated once and reused for AIRFLOW_SECRET_KEY,
 #     AIRFLOW_JWT_SECRET, and SUPERSET_SECRET_KEY — matching install.sh.
 #   - Placeholder detection: empty, GENERATE_ME_*, and YOUR_* values
-#     are treated as "missing".
+#     are treated as "missing". global.env ships its three string secrets as
+#     the GENERATE_ME_SECRET sentinel for exactly this reason: the shipped
+#     default has to be recognisable, or generation is skipped and the
+#     published value survives on every host seeded from the tree
+#     (data-lab t_35b04ad9).
+#   - The two key-shaped defaults in global.env (AIRFLOW_FERNET_KEY,
+#     ENCRYPTION_KEY) cannot be a sentinel — both consumers refuse to start on
+#     a malformed key — so they ship as valid, throwaway keys. They are
+#     therefore never "missing" and never auto-generated: rotating each one
+#     destroys something (stored connection passwords, Dockhand's stored
+#     credentials). They are recognised by their plaintext and WARNED about
+#     instead — see is_shipped_default_key().
+#   - SUPERSET_SECRET_KEY is a sentinel and so IS generated, but it destroys
+#     something too: Superset encrypts its stored connection passwords with it,
+#     so on an instance that has already provisioned connections the generated
+#     value leaves that ciphertext unreadable. The generation branch warns with
+#     the re-encrypt command (data-lab t_19e41e00) — the third at-rest key.
 # =============================================================================
 
 set -euo pipefail
@@ -90,13 +106,40 @@ set_env_var() {
 }
 
 # is_missing VALUE
-# Returns 0 (true) if the value should be treated as "not set":
-# empty, starts with GENERATE_ME_, or starts with YOUR_.
+# Returns 0 (true) if the value should be treated as "not set": empty, starts
+# with GENERATE_ME_, or starts with YOUR_.
+#
+# The sentinel global.env ships for its three string secrets is
+# GENERATE_ME_SECRET, which is in this family by design — one vocabulary for
+# "this is not a value yet". Its other user is global.env's IP=YOUR_SERVER_IP,
+# which the same run replaces with the detected address. Nothing else needs
+# adding here for those three: a shipped default that this function does not
+# recognise is the bug (it reads as a real secret, generation is skipped, and
+# the published value survives).
 is_missing() {
     local val="$1"
     [[ -z "$val" ]] && return 0
     [[ "$val" == GENERATE_ME_* ]] && return 0
     [[ "$val" == YOUR_* ]] && return 0
+    return 1
+}
+
+# is_shipped_default_key VALUE
+# Returns 0 (true) if VALUE is one of the two key-shaped shipped defaults that
+# global.env carries (AIRFLOW_FERNET_KEY, ENCRYPTION_KEY).
+#
+# These two are real, valid keys, so is_missing() must NOT call them missing:
+# Airflow and Dockhand both refuse to start on a malformed key, which is why
+# they cannot be a sentinel like the three string secrets. They are recognised
+# by their plaintext instead — both decode to "data-lab-shipped-default-key-00N"
+# — so this function stays true to that one convention rather than keeping a
+# second copy of the values here.
+is_shipped_default_key() {
+    local val="$1" decoded
+    [[ -z "$val" ]] && return 1
+    # urlsafe base64 → standard base64, then decode. Garbage fails the decode.
+    decoded=$(printf '%s' "$val" | tr '_-' '/+' | base64 -d 2>/dev/null) || return 1
+    [[ "$decoded" == data-lab-shipped-default-key-* ]] && return 0
     return 1
 }
 
@@ -213,6 +256,18 @@ if is_missing "$SUPERSET_EXISTING"; then
     set_env_var "$GLOBAL_ENV" "SUPERSET_SECRET_KEY" "$SHARED_SECRET"
     success "Set SUPERSET_SECRET_KEY"
     GENERATED=$((GENERATED + 1))
+    # This one cannot be a silent rotation: Superset encrypts the connection
+    # passwords it stores with SECRET_KEY, so the value being replaced here is
+    # also the key that ciphertext was written under. A fresh clone has nothing
+    # stored and can ignore the warning; an instance that has already
+    # provisioned connections cannot, and the failure is quiet — login and
+    # /api/v1/dashboard stay 200 while /api/v1/database/ 500s (t_19e41e00).
+    warn "SUPERSET_SECRET_KEY also encrypts Superset's stored connection passwords."
+    warn "  On an instance that has already provisioned them, re-encrypt under the"
+    warn "  new key (keep the old value until this succeeds):"
+    warn "    docker exec superset superset re-encrypt-secrets"
+    warn "      --previous_secret_key \"<the old SUPERSET_SECRET_KEY>\""
+    warn "  A fresh clone has nothing stored yet and can ignore this. See global.env (Secrets)."
 else
     info "SUPERSET_SECRET_KEY already set — skip"
 fi
@@ -226,6 +281,12 @@ if is_missing "$FERNET_EXISTING"; then
     GENERATED=$((GENERATED + 1))
 else
     info "AIRFLOW_FERNET_KEY already set — skip"
+    if is_shipped_default_key "$FERNET_EXISTING"; then
+        warn "AIRFLOW_FERNET_KEY still holds the shipped default. Rotating it is a"
+        warn "  deliberate step, not a find/replace: it decrypts connection passwords"
+        warn "  stored in the Airflow metadata DB. Export the connections under the old"
+        warn "  key, change the key, import them under the new one. See global.env (Secrets)."
+    fi
 fi
 
 # ENCRYPTION_KEY (Dockhand — unique)
@@ -237,6 +298,13 @@ if is_missing "$ENC_EXISTING"; then
     GENERATED=$((GENERATED + 1))
 else
     info "ENCRYPTION_KEY already set — skip"
+    if is_shipped_default_key "$ENC_EXISTING"; then
+        warn "ENCRYPTION_KEY still holds the shipped default. Rotating it makes"
+        warn "  Dockhand's stored credentials unreadable, so write the new value to"
+        warn "  global.env AND dockhand/.env: a clone that predates t_35b04ad9 still"
+        warn "  marks that line service-specific, and the sync preserves such a line"
+        warn "  instead of carrying the change across. See global.env (Secrets)."
+    fi
 fi
 
 # --- Sync secrets to service .env files -------------------------------------

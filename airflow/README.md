@@ -156,6 +156,215 @@ The staging and `mart*` schemas are rebuilt by `grocery_dbt` too; if an excess w
 ever *aggregated* into a mart, drop those schemas as well rather than trusting an
 incremental re-run of the transform.
 
+## Read order: a referencing route is read before the route it references
+
+`grocery_ingest_api` runs one task per route, four at a time, so **the order the
+routes are read in is a property of the raw layer**, not an implementation
+detail. Every read is a point-in-time snapshot of a live source, and a row can
+only carry a foreign key whose parent was already committed when that route was
+read. Read a child route *after* its parent and it can pick up a generator tick
+the parent's window had already closed over: the events land, the orders never
+do, and the staging `relationships` test fails the pipeline on a healthy ingest.
+
+`REFERENCING_ROUTES` in `dags/grocery_ingest_api.py` declares that order as task
+dependencies — the child finishes reading, then the route it references starts.
+The list is exactly the cross-route `relationships` tests in
+`dbt/grocery/models/staging/staging.yml` (master data included), and
+`dags/tests/test_load_order.py` fails when the two drift apart, so a new FK test
+cannot pass without its read order being declared. Airflow dependencies are
+transitive: `pos_return_items → pos_transaction_items → pos_transactions` needs
+only the two adjacent edges.
+
+Reading the child first is what makes the FK hold, and it holds in one direction
+only: the parent's window then ends *after* everything the child could have
+seen, and its start is either `MAX(watermark)` in raw — above which every row it
+has not loaded necessarily sits — or, for a `full` reload, a fresh mirror of the
+source. The opposite skew (a parent whose child has not arrived yet) is the
+benign direction: the next run delivers the child, and nothing asserts on it.
+
+### The read *cut*: the parent's window ends where its children's reads ended
+
+Ending "after everything the child could have seen" is not enough on its own. It
+leaves the parent's window bounded by its own task start, so the foreign key holds
+by an accident of scheduling — the parent happened to start later — and nothing in
+the DAG says it has to. It also reads *past* what its children saw, which is the
+wrong side for the reverse invariant on the same pair:
+`assert_online_orders_reconcile` asserts that a completed order has its final
+lifecycle event.
+
+So each route returns the instant its own read ended — its window end for an
+incremental load (rows newer than that are filtered out even though they were
+physically read), its last read for a whole-table one — and a referenced route
+takes the **latest** of its referencing routes' reads as the end of its own window
+(`cut_from` in `ingest_table`, wired from the same edge list). Latest, not
+earliest: the earliest child's end leaves the events route — now a windowed load
+but a `full` one until t_5a16129f, so the last to finish reading — reading past
+the orders window, measured as 29 orphan events on the dev slot. With the latest,
+a referenced route covers everything that referenced it, so every event's parent
+is inside the parent's window and an order's state is read no later than the
+events route read. A route nothing references keeps its own task start, unchanged,
+and a `full` route ignores the cut — it reads the whole table, so it already
+covers any cut its children can report.
+
+Two exceptions, both needed by the same route:
+
+* `online_orders` is an **as-of** route (`AS_OF_ROUTES`), because its rows mutate
+  after insert — see the next section. It takes the cut of the one route that
+  shares its clock when the row changes (`online_order_events`), not the latest of
+  its children's cuts.
+* `online_order_events` is **incremental** since t_5a16129f (it used to be the
+  full reload in the table below), which is what makes the pair's shared instant
+  an instant rather than "the last moment the events route happened to read".
+
+Measured on the dev slot, 2026-09-21 (30 s generator ticks), before the order
+existed:
+
+| route | read window | note |
+|-------|-------------|------|
+| `online_orders` | 14:00:05.98 → 14:00:10.27 | incremental; window ends at its own task start |
+| `online_order_events` | 14:00:09.72 → 14:00:28.90 | **full** reload; no window, pages past its own start |
+
+The events route started 3.7 s after the orders route and reloaded 145k rows over
+19 s, so it read the 14:00:13 and 14:00:27 ticks that the orders window — closed
+at 14:00:05.98 — could no longer see. 8 staged events with no staged order (10 at
+20:04:13.717 on the test slot's fresh seed, which is how t_7e427ee6 was filed).
+A tick landing between two reads is not rare: the interval is 30 s and a full
+reload of that route takes ~19 s.
+
+To check the whole FK set by hand (staging vs staging, no source needed):
+
+```sql
+select count(*) as orphan_events from staging.stg_online_order_events e
+ where not exists (select 1 from staging.stg_online_orders o where o.order_id = e.order_id);
+```
+
+### The as-of bound: a route whose rows mutate (t_5a16129f)
+
+One pair needs a third thing on top of the read order and the cut, because its rows
+**mutate after they are inserted**. An online order's `status` moves long after its
+`created_at` (placed → confirmed → picking → ready → completed, each with an event),
+so there are two clocks and the insert clock can carry only one of them:
+
+* it cannot see a state change. A window anchored on `created_at` never re-reads a
+  row the watermark has passed, so an order loaded as `placed` keeps that status in
+  raw forever. Nothing asserted on it — the reconcile test looks for completed
+  orders, not stale ones — and the events route being a FULL reload hid it, because
+  the pair was as fresh as the last full read of it.
+* it cannot be bounded safely. **This is the completion residual t_7e427ee6 filed
+  and this card closes.** With the window ending at the events route's read instant
+  but anchored on `created_at`, an order that completes *while the orders route is
+  being read* is still inside the window (it was created long before it completed)
+  and lands as `status='completed'` while its terminal event, inserted after that
+  instant, is not read until the next run. `assert_online_orders_reconcile` catches
+  exactly that. On the test slot's 2026-09-21T21:22:29Z fresh seed it failed with 5
+  rows while the FK test passed; the next events read healed it, which is what made
+  it look like a flake. The window grows with the read, so the residual does too:
+  worst on a fresh seed (a 30-day window), invisible on a narrow delta.
+
+**The fix.** All three routes of the cluster are windowed now and all three windows
+end at the *same instant* — the instant `online_order_events` read to:
+
+| route | window | end bound |
+|-------|--------|-----------|
+| `online_order_events` | `[MAX(created_at) in raw, its own task start]` | the `cut` it hands to the other two |
+| `online_order_items` | `[MAX(created_at) in raw, that same instant]` | **snapshot-bound** (`SNAPSHOT_BOUND_ROUTES`): not its own task start |
+| `online_orders` | `[MAX(updated_at) in raw, that same instant]` | **as-of** (`AS_OF_ROUTES`): not its own task start, and not the latest of its children's cuts |
+
+The items row is not decoration. Bounding only the orders route closed the
+completion residual but left the other edge of the same cluster accidental: the
+items route ended at its own task start, seconds *later*, and an order inserted in
+that gap — the same transaction inserts the item that references it — is inside the
+items window and outside the orders window. The item loads, its order does not, and
+no later run re-reads it (an insert clock does not look back). It held on the dev
+slot by accident of task creation order, which is the "by accident of scheduling"
+t_7e427ee6's own comment rejects. Declaring it makes the read order
+`events → items → orders` and the instant shared by construction. Delaying an item
+past the instant is safe where delaying a state change is not: `created_at` is
+immutable and monotone, so the item is read by the next run — its insert clock is
+above the next watermark.
+
+`online_order_events` is incremental since t_5a16129f (it used to be the full
+reload above): the source route gained `created_after`/`created_before` on
+`online.order_events.created_at` and returns the column (verisim `e9bd295`, card
+t_51bbc12e). That is what makes the pair's shared instant an instant — a `full`
+route ignores the cut and reports its last read instead.
+
+`online_orders` is declared in `AS_OF_ROUTES`: it is read as of the instant
+`online_order_events` read to, on an end bound named for the clock that moves when
+the row does (`updated_before`). The clock is the child's own for the same row —
+the generator writes a status change and the event that explains it in **one
+transaction**, so `updated_at == MAX(order_events.created_at)` per order (0
+differing of 39243 on the dev slot 2026-09-21; verisim `80b3e0f` guards it
+source-side). That equality is what makes the bound safe: no order is loaded ahead
+of the event that explains it.
+
+The lower bound has to move with the upper one. Excluding a row for having moved
+after the bound while water-marking on `created_at` would make it *lost*, not
+delayed: its `created_at` is below the next insert-clock watermark, so no later run
+would reach it. On the state clock it is delayed by exactly one run.
+
+**Measured on the dev slot, 2026-09-21** (source read-only probe, at the instant a
+run's pair ended at — `manual_t_5a16129f_r2`, 22:32:04Z):
+
+| reader | order-loads as `completed` whose terminal event is stamped after the instant |
+|---|---|
+| created-clock window (before) | **77** at that instant; **260475** summed over 155 sampled read ends (30-day window) |
+| state-bounded window (after) | **0** at that instant; **0** over the same 155 |
+
+and the same run's windows, from the task logs:
+
+| run | `online_order_events` | `online_order_items` | `online_orders` |
+|---|---|---|---|
+| first run after the change (raw has no `created_at`/`updated_at` yet → the transition fallback, WARNING, column ALTERed in) | 188249 rows, window `now-365d → 22:30:40.726142Z` | — (that run predates the items bound) | 38740 rows, window `now-365d → 22:30:40.726142Z` (its end = the events route's instant) |
+| next run (steady state) | **828 rows**, `18:30:10-04:00 → 22:32:04.405018Z` | — | **545 rows**, `18:30:10-04:00 → 22:32:04.405018Z` |
+| with the items bound in place (`_r3`) | 10114 rows, `18:31:41-04:00 → 22:55:55.217477Z` | 44682 rows, `18:31:41-04:00 → 22:55:55.217477Z` | 4457 rows, `18:31:41-04:00 → 22:55:55.217477Z` |
+| the run after that (`_r4`) | 361 rows, `18:55:51-04:00 → 22:56:40.620225Z` | 1723 rows, `18:55:51-04:00 → 22:56:40.620225Z` | 258 rows, `18:55:51-04:00 → 22:56:40.620225Z` |
+
+Every run reconciled exactly (distinct keys landed == the source's advertised
+total), all three windows of a run end at the same instant to the microsecond, and
+afterwards `raw_online` had 0 completed orders without a final event, 0 items whose
+order is missing and 0 events whose order is missing (staging agrees — that is the
+`dbt` layer's FK and reconcile tests, by hand).
+
+Two guards worth knowing about:
+
+* an as-of route — and a snapshot-bound one — **refuses to load** when the route
+  whose instant it ends at returned no read cut, instead of falling back to its own
+  task start. The fallback is what the residual was, and what the orphan-item hole
+  was; a run that cannot bound the rows it loads is a failed run, not a degraded one.
+* `dags/tests/test_load_order.py` 5a–5f/6a–6d and
+  `dags/tests/test_incremental_watermarks.py` 6a–6f fail if the declaration,
+  `TABLE_CONFIGS`, the read order and the DAG wiring drift apart — including a
+  provider that stops being windowed, which would silently end the cluster at two
+  different instants again.
+
+To check the residual by hand at any instant B (source, read-only):
+
+```sql
+-- orders that completed AFTER B, as the reader bounded at B sees them
+select o.order_id from online.orders o
+ where o.updated_at <= '2026-09-21T22:32:04.405018+00:00'::timestamptz
+   and o.status = 'completed'
+   and (select max(e.created_at) from online.order_events e
+         where e.order_id = o.order_id
+           and e.event_type in ('picked_up', 'delivered'))
+       > '2026-09-21T22:32:04.405018+00:00'::timestamptz;
+-- 0 rows: every completed order in the window has its terminal event inside it.
+-- Swap `updated_at` for `created_at` above and the same query returns rows —
+-- that is the residual, and it is what this pair used to load.
+```
+
+The other edge of the cluster, checked the same way — an item loaded against an
+order the same instant's window did not carry:
+
+```sql
+-- raw items whose order is absent, after any run
+select count(*) from raw_online.order_items i
+ where not exists (select 1 from raw_online.orders o where o.order_id = i.order_id);
+-- 0: the order the item references is inside the orders window, because the item
+-- is inside the events window that both the orders window and this one end at.
+```
+
 ## Incremental loads, and forcing a full reload
 
 `TABLE_CONFIGS` gives every table one of two strategies. `full` TRUNCATEs the raw
@@ -187,7 +396,7 @@ and `verify_raw_vs_source` fails on excess only.
 | `pos_transactions`, `pos_transaction_items` | `transaction_dt` | the backfill replays a day hour by hour (`main.py` calls `pos.generate_pos_transactions(..., sim_dt=hour boundary)`), so a whole hour's batch is the hour it belongs to, not the moment it was written |
 | `online_orders`, `online_order_items` | `placed_dt` | same replay: `online.generate_online_orders(..., sim_dt)` writes `placed_dt = sim_dt` |
 
-All six now take `created_after` / `created_before` on the source and watermark on
+All six took `created_after` / `created_before` on the source and watermark on
 `created_at` — the insert clock, `DEFAULT NOW()`, written by the same statement as
 the row, so it is monotone in insert order and immutable. The two item routes have
 no timestamp of their own and join the header's clock (`pos.transactions.created_at`,
@@ -195,6 +404,13 @@ no timestamp of their own and join the header's clock (`pos.transactions.created
 own either, which is why the routes gained it in the payload rather than in the
 table. `start_dt`/`end_dt` still filter the date columns on every one of these
 routes, unchanged in meaning.
+
+**One of the six has since moved again, for a different reason:** `online_orders`
+is on the *state* clock (`updated_at`) since t_5a16129f, because its `status` moves
+long after the row is written and a pair whose two sides are judged at one instant
+cannot be bounded on the insert clock. That is a different defect from the
+backdating one above; see "The as-of bound" earlier in this file. `online_order_items`
+stays on the insert clock — a line has no state to be as-of.
 
 Measured cases, both on the dev slot:
 
@@ -298,4 +514,65 @@ truncating full load instead — the only way to drop rows the source no longer 
 put `"full"` back on that entry, or drop just its raw table and run with the params
 above (an emptied table alone is not enough: the incremental fallback is the last
 365 days).
+
+## One invocation per dbt layer: a view swap cascades (t_b48af51f)
+
+dbt-postgres rebuilds a **view** in three statements:
+
+```sql
+alter view staging.stg_pos_products rename to stg_pos_products__dbt_backup;
+create view staging.stg_pos_products as …;
+drop view staging.stg_pos_products__dbt_backup cascade;   -- dependents die here
+```
+
+A view that reads `stg_pos_products` is not re-pointed by the rename — PostgreSQL
+binds the dependency by OID, so the dependent **follows the rename onto the
+backup** — and the trailing `CASCADE` then deletes it. `staging.
+stg_pos_transaction_items` is a view over `stg_pos_products`
+(`dbt/grocery/models/staging/stg_pos_transaction_items.sql`), so any run in which
+`stg_pos_products` is rebuilt *after* its dependent, with nothing rebuilding the
+dependent afterwards, leaves the dependent MISSING: its 14 tests and the two
+intermediate models that read it fail on `relation "staging.
+stg_pos_transaction_items" does not exist`, and the DAG's `retries=1` cannot
+recover because no task re-creates the view (CT107, 2026-09-21, `transform`
+failed on two consecutive cycles).
+
+`grocery_dbt` used to build staging as **one Airflow task per model**, all in
+parallel inside a single dag_run — an ordering no Airflow edge expressed and dbt
+never got to enforce, so which of the two finished second was a coin flip per
+cycle. It now runs the layer as **one** `dbt run --select staging`
+(`airflow/dags/grocery_dbt.py`, `staging.run_staging`), which hands the ordering
+back to dbt: the swap for a dependency always completes before its dependent is
+rebuilt in the same run. The cost is per-model Airflow visibility/retries in that
+layer; marts and intermediate tables are unaffected (a table's dependents do not
+ride along on its swap, and nothing in this project reads `mart*` from a view).
+
+Two guards:
+
+* `dags/tests/test_dbt_staging_order.py` reads the staging SQL and the DAG (no
+  database) and fails when a staging model `ref`s another and the build order is
+  not established — either by the single layer invocation or, if the layer is ever
+  split again, by an Airflow path from the dependency's task to the dependent's.
+  It also fails when a *new* intra-staging `ref` appears, so the next author has to
+  come and declare it rather than discovering the hazard in a failed cycle:
+
+  ```bash
+  docker exec airflow-worker python /opt/airflow/dags/tests/test_dbt_staging_order.py
+  ```
+
+* `e2e-testing/test-staging-view-swap.sh` runs the real project against a scratch
+  schema and asserts the whole thing end to end: the defect (rebuild the
+  dependency in a separate invocation and the dependent IS gone), then one layer
+  invocation and a second one on the swap path with every staging relation still
+  resolving and dbt's own `run_results.json` showing the dependency completed
+  first. It drops its schema and never writes to the deployed `staging`:
+
+  ```bash
+  bash e2e-testing/test-staging-view-swap.sh                    # deployed project
+  bash e2e-testing/test-staging-view-swap.sh --project-src /path/to/candidate/dbt/grocery
+  ```
+
+  Measured on the dev slot (CT106) 2026-09-21: PASS, 20 assertions; the layer runs
+  32 view models in ~1.8 s, and step 1 reproduces the loss with dbt's own
+  `Applying DROP to: …stg_pos_products__dbt_backup` in the log.
 

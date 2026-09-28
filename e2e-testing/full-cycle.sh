@@ -5,6 +5,10 @@
 #   stop → wipe conf → reseed (init.sh) → start → verisim backfill →
 #   full pipeline (ingest + dbt) → superset seed → automated verification.
 #
+# Phase 6 drains the scheduler-created catch-up run of grocery_complete_pipeline
+# before it triggers the cycle's own, so two pipeline/dbt runs never share the
+# EDW — see "phase-6 slot drain" below (t_67bb60ef).
+#
 # STRICT RULE (Chris, 2026-08-31): any manual/live-DB fix made while this is
 # running means the test has FAILED. Fix the repo/process instead, commit,
 # and RESTART this script from the top. A pass is only valid on an untouched
@@ -30,7 +34,8 @@ set -uo pipefail
 DATALAB="${DATALAB:-/opt/data-lab}"
 # Default to THIS host's address, never a hardcoded one: a baked-in IP makes the gate
 # probe a different machine and report on the wrong instance (found 2026-09-20 — this
-# defaulted to 192.168.1.7, the host being replaced).
+# defaulted to <retired-host>, the address of the host being replaced — that host is
+# retired now and <test-slot> is the current test slot).
 IP="${IP:-$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')}"
 LOG_DIR="${LOG_DIR:-/tmp/e2e-full-cycle}"
 LOG_FILE="$LOG_DIR/full-cycle-$(date +%Y%m%d-%H%M%S).log"
@@ -82,13 +87,30 @@ airflow_token() {
 
 wait_dag_run() {  # wait_dag_run <dag_id> <run_id> <max_minutes>
   local dag=$1 run=$2 max=$3 elapsed=0
+  local tok state other rc line
   while [ $elapsed -lt $((max * 60)) ]; do
-    local tok state
     tok=$(airflow_token)
     state=$(curl -s -H "Authorization: Bearer $tok" \
       "http://localhost:8080/api/v2/dags/$dag/dagRuns/$run" |
       python3 -c 'import sys,json; print(json.load(sys.stdin).get("state","unknown"))' 2>/dev/null)
     echo "  [$dag/$run] state=$state (${elapsed}s)"
+    # Anything a SCHEDULER or hand trigger started while this run is queued/running
+    # is phase 6 racing itself again (t_67bb60ef): name it by run_id here, so a
+    # later "relation staging.stg_pos_transaction_items does not exist" is not left
+    # as the only evidence of a concurrent dbt run. The cycle's OWN children (the
+    # ingest/dbt runs its pipeline run starts) are excluded by run_type — see
+    # competing_dag_runs.
+    other=$(competing_dag_runs "$run"); rc=$?
+    if [ "$rc" -eq 0 ] && [ -n "$other" ]; then
+      while read -r line; do
+        [ -z "$line" ] && continue
+        case "$COMPETING_RUNS" in
+          *"$line"$'\n'*) ;;
+          *) COMPETING_RUNS="$COMPETING_RUNS$line"$'\n'
+             echo "  RACE: $line is in flight while $dag/$run is $state — a run this cycle did not start, sharing the EDW" ;;
+        esac
+      done <<<"$other"
+    fi
     [ "$state" = "success" ] && return 0
     [ "$state" = "failed" ] && return 1
     sleep 30; elapsed=$((elapsed + 30))
@@ -210,15 +232,145 @@ mart_gate() {
 # API: it stays readable while the API server is busy or down, and it is the
 # same store the scheduler consults to decide what is still running.
 
-inflight_dag_runs() {
+inflight_dag_runs() {  # [exclude_run_id]
   # Prints "<dag_id> <run_id> <state>" per in-flight tracked run.
   # rc 0 = read ok (possibly no rows); rc 2 = status UNKNOWN — an unreadable
   # state store is not the same as "at rest", so it must not yield a verdict.
-  local rows
+  # An optional run_id is excluded (the cycle's own run, while it is in flight).
+  local rows out
   rows=$(docker exec postgres psql -U postgres -d airflow -tAc \
       "select dag_id || ' ' || run_id || ' ' || state from dag_run where state in ('running','queued')" 2>/dev/null) || return 2
-  echo "$rows" | grep -E "^($(echo "$TRACKED_DAGS" | tr ' ' '|')) " || true
+  out=$(printf '%s\n' "$rows" | grep -E "^($(echo "$TRACKED_DAGS" | tr ' ' '|')) " || true)
+  if [ -n "${1:-}" ]; then
+    out=$(printf '%s\n' "$out" | awk -v x="$1" 'NF && $2 != x')
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
+
+# --- phase-6 slot drain ----------------------------------------------------
+# Why phase 6 drains the slot before triggering (t_67bb60ef, 2026-09-21):
+# unpausing grocery_complete_pipeline on a freshly reseeded metadata db makes the
+# scheduler create its CATCH-UP run for the most recent schedule slot
+# (`0 */6 * * *`, already in the past) — and the DAG is max_active_runs=1, so the
+# cycle's own run merely queues behind it. That wait is not harmless: the catch-up
+# run does the same ingest+dbt work, and grocery_dbt carries retries=1 /
+# retry_delay=2m, so one of its failed dbt tasks comes BACK while the cycle's own
+# run is in its transform. Two grocery_dbt runs in flight drop/recreate staging
+# relations under each other — 2026-09-21 20:58:13 UTC, t_0f50c0ab's cycle: its
+# transform died on `relation "staging.stg_pos_transaction_items" does not exist`
+# 32 s after its own staging task had created it. The verdict then describes the
+# scheduler, not the code under test.
+#
+# So phase 6 waits for the slot to come to rest before triggering, logging every
+# run_id it waited on and the state each of them ENDED in (so a reader can tell a
+# drained slot from a clean one). The clear verdict has to SURVIVE DRAIN_SETTLE_S:
+# the scheduler creates the catch-up run a few seconds after the unpause, so an
+# instantaneous "nothing in flight" would race exactly the run this exists to
+# avoid.
+# >>> phase-6 slot drain (extracted verbatim by test-full-cycle-drain.sh) >>>
+
+DRAIN_POLL_S="${DRAIN_POLL_S:-15}"      # poll interval, seconds
+DRAIN_SETTLE_S="${DRAIN_SETTLE_S:-90}"  # the slot must stay clear this long; must
+                                        # exceed unpause → catch-up-created latency
+DRAIN_MAX_MIN="${DRAIN_MAX_MIN:-20}"    # give up (and fail phase 6) after this
+DRAINED_RUN_IDS=""                      # run_ids this drain waited on ("a b c")
+COMPETING_RUNS=""                       # runs seen while the cycle's own run ran
+
+run_rows() {  # run_rows <run_id>... -> "<dag_id> <run_id> <state> end=<ts|->"
+  # A run that left the in-flight set has to be shown to have ENDED, not to have
+  # vanished: `success`/`failed` is what makes a retry impossible.
+  local list="" r
+  for r in "$@"; do
+    [ -z "$r" ] && continue
+    list="$list,'$(printf '%s' "$r" | sed "s/'/''/g")'"
+  done
+  [ -z "$list" ] && return 0
+  docker exec postgres psql -U postgres -d airflow -tAc \
+    "select dag_id || ' ' || run_id || ' ' || state || ' end=' || coalesce(end_date::text,'-')
+       from dag_run where run_id in (${list#,}) order by start_date" 2>/dev/null | tr -d '\r'
+}
+
+drain_slot() {  # rc 0 = no tracked run in flight (settled); 1 = gave up/unreadable
+  local runs rc now elapsed line rid new
+  local started last_tick clear_since=-1 seen=""
+  started=$(date +%s); last_tick=$started
+  while :; do
+    runs=$(inflight_dag_runs); rc=$?
+    now=$(date +%s); elapsed=$((now - started))
+    if [ "$rc" -eq 2 ]; then
+      echo "  DRAIN: airflow metadata db unreadable — cannot tell whether the slot is clear"
+      return 1
+    fi
+    if [ -z "$runs" ]; then
+      if [ "$clear_since" -lt 0 ]; then
+        clear_since=$now
+        echo "  DRAIN: no tracked run in flight (${elapsed}s) — confirming a clear slot for ${DRAIN_SETTLE_S}s"
+      fi
+      if [ $((now - clear_since)) -ge "$DRAIN_SETTLE_S" ]; then
+        if [ -z "$DRAINED_RUN_IDS" ]; then
+          echo "  DRAIN: slot clear — nothing was in flight (clean slot, no run drained)"
+        else
+          echo "  DRAIN: slot clear after ${elapsed}s — drained run_id(s): $DRAINED_RUN_IDS"
+          echo "  DRAIN: how the drained run(s) ended:"
+          run_rows $DRAINED_RUN_IDS | sed 's/^/         /'
+        fi
+        return 0
+      fi
+      sleep "$DRAIN_POLL_S"
+      continue
+    fi
+    clear_since=-1
+    new=0
+    while read -r line; do
+      [ -z "$line" ] && continue
+      case "$seen" in
+        *"$line"$'\n'*) ;;                          # this dag/run/state was already reported
+        *) seen="$seen$line"$'\n'; new=1
+           echo "  DRAIN: waiting on $line (${elapsed}s)" ;;
+      esac
+      rid=${line#* }; rid=${rid%% *}                # "<dag_id> <run_id> <state>" → run_id
+      case " $DRAINED_RUN_IDS " in
+        *" $rid "*) ;;
+        *) DRAINED_RUN_IDS="${DRAINED_RUN_IDS:+$DRAINED_RUN_IDS }$rid" ;;
+      esac
+    done <<<"$runs"
+    if [ "$new" -eq 0 ] && [ $((now - last_tick)) -ge 60 ]; then
+      last_tick=$now
+      echo "  DRAIN: still waiting (${elapsed}s): $(printf '%s ' $runs)"
+    fi
+    if [ "$elapsed" -ge $((DRAIN_MAX_MIN * 60)) ]; then
+      echo "  DRAIN: TIMEOUT after ${DRAIN_MAX_MIN}m — the slot never came to rest:"
+      printf '%s\n' "$runs" | sed 's/^/         /'
+      return 1
+    fi
+    sleep "$DRAIN_POLL_S"
+  done
+}
+
+competing_dag_runs() {  # [exclude_run_id] -> "<dag_id> <run_id> <state> (<run_type>)"
+  # The runs a cycle must still worry about once it is under way: ones the
+  # SCHEDULER (or a hand trigger) started — never the ingest/dbt runs the cycle's
+  # own pipeline run starts. Airflow 3 records which is which in dag_run.run_type:
+  # a run a pipeline task started is `operator_triggered`, while a timetable run
+  # and a REST-triggered one are not (measured on 3.1.3, 2026-09-21 — the
+  # scheduler's catch-up run is `scheduled`, the cycle's own children are
+  # `operator_triggered`). This filter is not cosmetic: the first live run of this
+  # drain (22:41:14, t_67bb60ef) matched on dag_run rows alone and duly reported
+  # the cycle's OWN grocery_dbt child as a competing run — a WARN on every healthy
+  # cycle, which is how a warning stops being read.
+  local exclude="${1:-}" excl="" dags rows
+  [ -n "$exclude" ] && excl=" and run_id <> '$(printf '%s' "$exclude" | sed "s/'/''/g")'"
+  dags=$(printf "'%s'," $TRACKED_DAGS | sed 's/,$//')  # word-split on purpose
+  rows=$(docker exec postgres psql -U postgres -d airflow -tAc \
+      "select dag_id || ' ' || run_id || ' ' || state || ' (' || run_type || ')'
+         from dag_run
+        where state in ('running','queued')
+          and run_type is distinct from 'operator_triggered'
+          and dag_id in ($dags)$excl" 2>/dev/null) || return 2
+  printf '%s\n' "$rows" | grep -E '.' || true
+}
+# <<< phase-6 slot drain <<<
 
 last_load_run() {
   # Prints "<dag_id> <run_id> <state>" for the most recent ENDED run of a load
@@ -385,6 +537,15 @@ phase_pipeline() {
     airflow dags unpause -y grocery_complete_pipeline >/dev/null 2>&1
     airflow dags unpause -y grocery_dbt >/dev/null 2>&1
     airflow dags unpause -y grocery_ingest_api >/dev/null 2>&1'
+  # Unpausing on a fresh metadata db hands the slot a scheduler-created catch-up
+  # run (see the phase-6 slot drain above). Drain whatever it created BEFORE
+  # triggering the cycle's own run: two concurrent pipeline/dbt runs on one EDW
+  # is what killed t_0f50c0ab's cycle, and the 40-min cap below is for OUR run —
+  # it must not be spent queued behind someone else's.
+  if ! drain_slot; then
+    fail "pipeline (slot never came to rest — see the DRAIN lines above)"
+    return
+  fi
   curl -s -X POST "http://localhost:8080/api/v2/dags/grocery_complete_pipeline/dagRuns" \
     -H "Authorization: Bearer $tok" -H "Content-Type: application/json" \
     -d "{\"logical_date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"dag_run_id\": \"$RUN_TAG\"}" \
@@ -397,6 +558,17 @@ phase_pipeline() {
     echo "  last dbt log tail:"
     tail -5 "$DATALAB/airflow/dbt/grocery/logs/dbt.log" 2>/dev/null | tr -d '\000' | sed 's/^/    /'
     fail "pipeline run"
+  fi
+  # A run that appeared while the cycle's own run was in flight is the race this
+  # phase drains against. It is reported by run_id (the RACE lines above carried
+  # the moment it was seen) instead of being left to surface as an unexplained
+  # dbt error — but it is a WARNING, not a phase failure: the cycle's own run
+  # still answered for itself, and a scheduler boundary crossing is not a defect
+  # in the code under test.
+  if [ -n "$COMPETING_RUNS" ]; then
+    echo "  WARN: competing run(s) appeared while the cycle's run was in flight —"
+    echo "        the drain did not hold. Data read from this run is suspect:"
+    printf '%s\n' "$COMPETING_RUNS" | sed 's/^/         /'
   fi
 }
 
@@ -444,6 +616,20 @@ phase_verify() {
   [ "$n_null_ds" -eq 0 ] && pass "datasource_id all set" || fail "$n_null_ds charts missing datasource_id"
   [ "$n_null_qc" -eq 0 ] && pass "query_context all set" || fail "$n_null_qc charts missing query_context"
 
+  # 8a-ii: every mart dataset must carry the schema the EDW has NOW. A dataset's
+  # column list is a snapshot taken at registration and the marts are CTAS-built on
+  # every dbt run, so a mart that gained or renamed a column leaves its dataset
+  # stale — the chart then 400s in the browser while the data API, the two checks
+  # above and this gate's own exit code all stay green. Only the DOM scan saw it
+  # before, and it only sees the tiles a human happens to load.
+  local md_out md_rc
+  md_out="$(bash "$DATALAB/superset/verify_dataset_metadata.sh" 2>&1)"; md_rc=$?
+  printf '%s\n' "$md_out" >> "$LOG_DIR/verify_seed.out"
+  printf '%s\n' "  --- dataset metadata vs the EDW ---"
+  printf '%s\n' "$md_out" | grep -E "^(EDW mart tables|  ✗|      |  note:|STALE|OK:|SKIP:)" | sed 's/^/  /'
+  [ "$md_rc" -eq 0 ] && pass "dataset metadata matches the EDW" \
+    || fail "dataset metadata stale (gate exit $md_rc)"
+
   # 8b: data actually flowed through (raw loaded, mart layer populated).
   # The numbers come from measure_edw, taken before the guard decided the
   # platform was at rest — raw_* is loaded by ingest COPY/INSERT, which IS
@@ -483,8 +669,18 @@ phase_verify() {
     code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
     case "$code" in 2*|3*|404) pass "$name ($code)" ;; *) fail "$name ($code)" ;; esac
   done
-  echo "  NOTE: browser DOM verification of all 11 dashboards is the FINAL"
-  echo "        gate and is performed by the agent (see skill e2e-testing)."
+  # The final gate is scripted now (t_48a6bfb2): e2e-testing/dom-scan.js renders
+  # every dashboard in headless Chromium and reads the DOM the user sees, because
+  # an API 200 is not proof that a chart renders (39 broken tiles once passed every
+  # API and DB gate). It runs from a WORKSTATION with node >= 22 + Chromium — this
+  # slot has neither — so the command is printed here rather than run, and exit 2/3
+  # must never be read as a pass.
+  echo "  NOTE: browser DOM verification of every dashboard is the FINAL gate;"
+  echo "        it is scripted (e2e-testing/dom-scan.js) and runs from a"
+  echo "        workstation that has node >= 22 + Chromium:"
+  echo "            bash e2e-testing/dom-scan.sh $IP"
+  echo "        exit 0 clean | 1 error tiles | 2 wrong page | 3 harness failure;"
+  echo "        2 and 3 certify NOTHING. See e2e-testing/README.md, skill e2e-testing."
 }
 
 # --- main -----------------------------------------------------------------
